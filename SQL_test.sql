@@ -1,178 +1,249 @@
-WITH GeneralJournalAccountEntry as (
-    SELECT gjae.RECID
-          ,gjae.MainAccount
-          ,gjae.TransactionCurrencyCode as ValutaKode
-          ,gjae.LedgerAccount as FinansKonto
-          ,gjae.ReportingCurrencyAmount as Posteringsbeloeb
-          ,gjae.TransactionCurrencyAmount as Valutaposteringsbeloeb
-          ,gjae.Text as Posteringstekst
-          ,gjae.IsCredit as ErKredit
-          ,IIF(gjae.IsCredit=1, 'Kredit', 'Debet') as ErKreditTekst
-          ,gjae.IsCorrection as ErKorrektion
-          ,IIF(gjae.IsCorrection=1, 'Ja', 'Nej') as ErKorrektionTekst
-          ,gjae.GeneralJournalEntry 
-          ,gjae.LedgerDimension
-          ,gjae.PostingType as Bogfoeringstype
-          ,gjae.SCADeepLink
-          ,gjae.SCASourceEntryId
-          ,IIF(gjae.FinTag = 0, -1, gjae.FinTag) as FinTag /*I D365 kan FinTag/RECID være 0 og skal så have default surrogatnøgle*/
-          ,cast(gje.createdDateTime as date) as Posteringsdato
-          ,gje.createdBy as PosteretAf 
-          ,cast(gje.AccountingDate as date) as Bogfoeringsdato
-          ,gje.JournalCategory as Posteringstype
-          ,gje.JournalNumber as Kladdenummer
-          ,gje.SubledgerVoucher as Bilagsnummer
-          ,gje.FiscalCalendarPeriod 
-          ,Ledger.[Name] as Selskab
-          ,fcp.[Type] as PosteringsPeriodetype
-          ,ISNULL(davc.AFDELINGVALUE,-1) as AFDELINGVALUE  /* Posteringer på Balancen har typisk ikke en afdeling */
-          ,ISNULL(davc.COSTCENTERVALUE, -1 ) AS COSTCENTERVALUE
-          ,davc.PROJEKTVALUE
-          ,ISNULL(ISNULL(vt.voucher, vg_ltvl.voucher ),-1) AS KreditorBilagsnummer /*Ikke alle finansposteringer har kreditoroplysninger. Vi vælger desuden oprindelige kreditorbilagsnummer, hvis der er flere, da Kreditorbilaget skifter nummer, hvis det ikke er blevet godkendt inden et månedsskift*/
-          ,ISNULL(vt.DataAreaId, vg_ltvl.dataareaid ) AS KreditorSelskab
-          ,gje.DocumentDate AS Dokumentdato
-    FROM {{ ref('GeneralJournalAccountEntry')  }} gjae
-    LEFT JOIN {{ ref('GeneralJournalEntry')  }} gje
-      ON gje.RecId = gjae.GeneralJournalEntry
-    LEFT JOIN {{ ref('Ledger')  }} Ledger
-      ON Ledger.RecId = gje.Ledger
-    LEFT JOIN {{ ref('FiscalCalendarPeriod')  }} fcp
-      ON fcp.RecId = gje.FiscalCalendarPeriod
-    left join {{ ref('DimensionAttributeValueCombination')  }} AS davc 
-      ON gjae.LedgerDimension = davc.RECID
-    /* Der kan være flere bilagsrækker til et bilag, så vi vælger den seneste række pr. bilag for ikke at få dubletter i facten */  
-    LEFT JOIN ( SELECT voucher, dataareaid, ROW_NUMBER() OVER (PARTITION BY voucher, DataAreaId ORDER BY SinkModifiedOn DESC) AS rk_nr
-	              FROM   {{ ref('VendTrans')  }}
-				        WHERE  dbt_valid_to is null
-			        ) vt
-			        ON vt.voucher = gje.SubledgerVoucher
-              AND vt.DataAreaId = Ledger.Name
-			        AND vt.rk_nr = 1	
-    LEFT JOIN {{ ref('LedgerTransVoucherLink')  }} ltvl 
-	    ON ltvl.Voucher = gje.SubledgerVoucher
-	    AND ltvl.dataareaid = Ledger.Name
-	    AND ltvl.voucher like 'K-%'
-	  LEFT JOIN {{ ref('LedgerTransVoucherLink')  }} vg_ltvl 
-	    ON vg_ltvl.vouchergroupid = ltvl.vouchergroupid
-      AND vg_ltvl.dataareaid = ltvl.dataareaid
-	    AND vg_ltvl.recversion = 1
-      AND vg_ltvl.voucher like 'K-%' 
-    where gjae.dbt_valid_to is null 
-    and gje.dbt_valid_to is null
-    and Ledger.dbt_valid_to is null
-    and fcp.dbt_valid_to is null
-    and davc.dbt_valid_to is null
-    and ltvl.dbt_valid_to is null 
-	  and vg_ltvl.dbt_valid_to is null
+{{
+    config(
+        materialized='table',
+        schema='fact',
+        tags=['finance', 'journal_entries', 'd365'],
+        post_hook=[
+            "CREATE INDEX IF NOT EXISTS idx_fact_journal_bogfoeringsdato ON {{ this }} (Bogfoeringsdato)",
+            "CREATE INDEX IF NOT EXISTS idx_fact_journal_selskab ON {{ this }} (Selskab)",
+            "CREATE INDEX IF NOT EXISTS idx_fact_journal_recid ON {{ this }} (RECID)"
+        ]
+    )
+}}
 
+/*
+════════════════════════════════════════════════════════════════════════════════
+Fact Table: Journal Entries (Finansposteringer)
+════════════════════════════════════════════════════════════════════════════════
+Purpose: Central fact table for all general ledger journal entries from D365
+Author: Forca Analytics Team
+Last Modified: {{ run_started_at.strftime('%Y-%m-%d') }}
+════════════════════════════════════════════════════════════════════════════════
+*/
+
+WITH VendTransLatest AS (
+    /*
+    Henter den seneste kreditortransaktion pr. bilag for at undgå dubletter.
+    Der kan være flere bilagsrækker til et bilag, så vi vælger den seneste række
+    baseret på SinkModifiedOn.
+    */
+    SELECT
+        voucher,
+        DataAreaId,
+        ROW_NUMBER() OVER (
+            PARTITION BY voucher, DataAreaId
+            ORDER BY SinkModifiedOn DESC
+        ) AS rk_nr
+    FROM {{ ref('VendTrans') }}
+    WHERE dbt_valid_to IS NULL
 )
+
 ,
 
-Projekt as (
-  
-	SELECT DimprojektId
-        ,ProjektId
-        ,ProjektkontraktId
-	FROM {{ ref('DimProjekt') }} 
+GeneralJournalAccountEntry AS (
+    SELECT
+        gjae.RECID
+        ,gjae.MainAccount
+        ,gjae.TransactionCurrencyCode AS ValutaKode
+        ,gjae.LedgerAccount AS FinansKonto
+        ,gjae.ReportingCurrencyAmount AS Posteringsbeloeb
+        ,gjae.TransactionCurrencyAmount AS Valutaposteringsbeloeb
+        ,gjae.Text AS Posteringstekst
+        ,gjae.IsCredit AS ErKredit
+        ,CASE WHEN gjae.IsCredit = 1 THEN 'Kredit' ELSE 'Debet' END AS ErKreditTekst
+        ,gjae.IsCorrection AS ErKorrektion
+        ,CASE WHEN gjae.IsCorrection = 1 THEN 'Ja' ELSE 'Nej' END AS ErKorrektionTekst
+        ,gjae.GeneralJournalEntry
+        ,gjae.LedgerDimension
+        ,gjae.PostingType AS Bogfoeringstype
+        ,gjae.SCADeepLink
+        ,gjae.SCASourceEntryId
+        -- I D365 kan FinTag/RECID være 0 og skal så have default surrogatnøgle (-1)
+        ,CASE WHEN gjae.FinTag = 0 THEN -1 ELSE gjae.FinTag END AS FinTag
+        ,CAST(gje.createdDateTime AS DATE) AS Posteringsdato
+        ,gje.createdBy AS PosteretAf
+        ,CAST(gje.AccountingDate AS DATE) AS Bogfoeringsdato
+        ,gje.JournalCategory AS Posteringstype
+        ,gje.JournalNumber AS Kladdenummer
+        ,gje.SubledgerVoucher AS Bilagsnummer
+        ,gje.FiscalCalendarPeriod
+        ,Ledger.[Name] AS Selskab
+        ,fcp.[Type] AS PosteringsPeriodetype
+        -- Posteringer på Balancen har typisk ikke en afdeling
+        ,COALESCE(davc.AFDELINGVALUE, -1) AS AFDELINGVALUE
+        ,COALESCE(davc.COSTCENTERVALUE, -1) AS COSTCENTERVALUE
+        ,davc.PROJEKTVALUE
+        /*
+        Kreditorbilagsnummer: Ikke alle finansposteringer har kreditoroplysninger.
+        Vi vælger desuden oprindelige kreditorbilagsnummer, hvis der er flere,
+        da Kreditorbilaget skifter nummer, hvis det ikke er blevet godkendt inden et månedsskift.
+        */
+        ,COALESCE(vt.voucher, vg_ltvl.voucher, -1) AS KreditorBilagsnummer
+        ,COALESCE(vt.DataAreaId, vg_ltvl.DataAreaId) AS KreditorSelskab
+        ,gje.DocumentDate AS Dokumentdato
+    FROM {{ ref('GeneralJournalAccountEntry') }} gjae
+    LEFT JOIN {{ ref('GeneralJournalEntry') }} gje
+        ON gje.RecId = gjae.GeneralJournalEntry
+    LEFT JOIN {{ ref('Ledger') }} Ledger
+        ON Ledger.RecId = gje.Ledger
+    LEFT JOIN {{ ref('FiscalCalendarPeriod') }} fcp
+        ON fcp.RecId = gje.FiscalCalendarPeriod
+    LEFT JOIN {{ ref('DimensionAttributeValueCombination') }} AS davc
+        ON gjae.LedgerDimension = davc.RECID
+    LEFT JOIN VendTransLatest vt
+        ON vt.voucher = gje.SubledgerVoucher
+        AND vt.DataAreaId = Ledger.Name
+        AND vt.rk_nr = 1
+    -- Henter original kreditorbilag via voucher group
+    LEFT JOIN {{ ref('LedgerTransVoucherLink') }} ltvl
+        ON ltvl.Voucher = gje.SubledgerVoucher
+        AND ltvl.DataAreaId = Ledger.Name
+        AND ltvl.voucher LIKE 'K-%'
+    LEFT JOIN {{ ref('LedgerTransVoucherLink') }} vg_ltvl
+        ON vg_ltvl.VoucherGroupId = ltvl.VoucherGroupId
+        AND vg_ltvl.DataAreaId = ltvl.DataAreaId
+        AND vg_ltvl.RecVersion = 1
+        AND vg_ltvl.voucher LIKE 'K-%'
+    WHERE gjae.dbt_valid_to IS NULL
+        AND gje.dbt_valid_to IS NULL
+        AND Ledger.dbt_valid_to IS NULL
+        AND fcp.dbt_valid_to IS NULL
+        AND davc.dbt_valid_to IS NULL
+        -- Allow NULL LEFT JOINs - don't filter them out
+        AND (ltvl.dbt_valid_to IS NULL OR ltvl.RECID IS NULL)
+        AND (vg_ltvl.dbt_valid_to IS NULL OR vg_ltvl.RECID IS NULL)
+)
 
+,
+
+Projekt AS (
+    SELECT
+        ProjektId
+        ,DimProjektId
+    FROM {{ ref('DimProjekt') }}
 )
 
 ,
 
 /*
-Vi laver en distict på få værdier da tabellen kun skal bruges som bridge over til taxtrans
+════════════════════════════════════════════════════════════════════════════════
+Moms (Tax) CTEs
+════════════════════════════════════════════════════════════════════════════════
 */
-Momsbridge as 
-(
-  select distinct 
-    GeneralJournalAccountEntry, TaxTransRelationship, DataAreaId, TaxTrans
-  from {{ ref('TaxTransGeneralJournalAccountEntry') }}
-  where dbt_valid_to is null
+
+Momsbridge AS (
+    /*
+    Bridge tabel til TaxTrans.
+    DISTINCT anvendes da der kan være dubletter i kildesystemet.
+    Alternativt: Overvej at bruge ROW_NUMBER() for mere deterministisk adfærd.
+    */
+    SELECT DISTINCT
+        GeneralJournalAccountEntry,
+        TaxTransRelationship,
+        DataAreaId,
+        TaxTrans
+    FROM {{ ref('TaxTransGeneralJournalAccountEntry') }}
+    WHERE dbt_valid_to IS NULL
 )
+
 ,
-Moms as (
-     SELECT
-			ttgjae.GeneralJournalAccountEntry
-          ,Max(ttgjae.TaxTransRelationship) as TaxTransRelationship
-          ,Max(ttgjae.DataAreaId) as DataAreaId 
-          ,max(tt.JournalNum) as JournalNum
-          ,max(tt.Voucher) as Voucher
-          ,cast(sum(tt.TaxBaseAmountRep) as decimal(32,16)) as TaxBaseAmountRep
-          ,max(tt.TransDate) as TransDate
-          ,cast(sum(tt.TaxValue) as decimal(32,16)) as Moms
-          ,max(tt.TaxCode) as Momskode
-          ,max(tt.TaxDirection) as Momsretning
-          ,max(tt.TaxGroup) as Momsgruppe
-          ,cast(sum(tt.TaxAmountRep) as decimal(32,16)) as Momsbeloeb
-          ,cast(sum(tt.TaxInCostPriceRep) as decimal(32,16)) as IFM 
-          ,max(tt.TaxItemGroup) as Varemomsgruppe
-          ,max(tt.CurrencyCode) as MomsValutakode
 
-    FROM Momsbridge as ttgjae
-    INNER JOIN {{ ref('TaxTrans') }} as tt
-	    ON tt.RECID = ttgjae.TaxTrans
-	    AND tt.DataAreaId = ttgjae.DataAreaId
-    where tt.dbt_valid_to is null 
-    and tt.taxcode <> 'Ingen moms'
-	  Group by ttgjae.GeneralJournalAccountEntry
-
+Moms AS (
+    SELECT
+        ttgjae.GeneralJournalAccountEntry
+        -- These fields added to GROUP BY for deterministic results
+        ,ttgjae.TaxTransRelationship
+        ,ttgjae.DataAreaId
+        -- Aggregated fields
+        ,MAX(tt.JournalNum) AS JournalNum
+        ,MAX(tt.Voucher) AS Voucher
+        ,CAST(SUM(tt.TaxBaseAmountRep) AS DECIMAL(32,16)) AS TaxBaseAmountRep
+        ,MAX(tt.TransDate) AS TransDate
+        ,CAST(SUM(tt.TaxValue) AS DECIMAL(32,16)) AS Moms
+        ,MAX(tt.TaxCode) AS Momskode
+        ,MAX(tt.TaxDirection) AS Momsretning
+        ,MAX(tt.TaxGroup) AS Momsgruppe
+        ,CAST(SUM(tt.TaxAmountRep) AS DECIMAL(32,16)) AS Momsbeloeb
+        ,CAST(SUM(tt.TaxInCostPriceRep) AS DECIMAL(32,16)) AS IFM
+        ,MAX(tt.TaxItemGroup) AS Varemomsgruppe
+        ,MAX(tt.CurrencyCode) AS MomsValutakode
+    FROM Momsbridge AS ttgjae
+    INNER JOIN {{ ref('TaxTrans') }} AS tt
+        ON tt.RECID = ttgjae.TaxTrans
+        AND tt.DataAreaId = ttgjae.DataAreaId
+    WHERE tt.dbt_valid_to IS NULL
+        AND tt.TaxCode <> 'Ingen moms'
+    GROUP BY
+        ttgjae.GeneralJournalAccountEntry,
+        ttgjae.TaxTransRelationship,
+        ttgjae.DataAreaId
 )
 
-select 
-       case when gjae.FinTag = -1 
-          then  {{ generate_Forca_surrogate_key( 'FinTag, null' ) }} 
-          else {{ generate_Forca_surrogate_key( 'FinTag, Selskab' ) }} 
-       end                                                            As DimFinanskoderId
-      ,{{ generate_Forca_surrogate_key( 'MainAccount' ) }}            As DimFinanskontoId
-      ,{{ generate_Forca_surrogate_key( 'ValutaKode' ) }}             As DimValutaId 
-      ,{{ generate_Forca_surrogate_key( 'Bogfoeringstype' ) }}        As DimBogfoeringstypeId 
-      ,{{ generate_Forca_surrogate_key( 'Posteringstype' ) }}         As DimFinansPosteringstypeId
-      ,{{ generate_Forca_surrogate_key( 'Posteringsperiodetype' ) }}  As DimFinansPosteringsPeriodetypeId     
-      ,{{ generate_Forca_surrogate_key( 'AFDELINGVALUE' ) }}          As DimAfdelingId     
-      ,{{ generate_Forca_surrogate_key( 'COSTCENTERVALUE' ) }}        As DimBaererId 
-      ,{{ generate_Forca_surrogate_key( 'ProjektId' ) }}              As DimProjektId  
-      ,{{ generate_Forca_surrogate_key( 'Selskab' ) }}                As DimJuridiskEnhedId  
-      ,{{ generate_Forca_surrogate_key( 'Momskode' ) }}               as DimMomskodeId
-      ,{{ generate_Forca_surrogate_key( 'Momsretning' ) }}            as DimMomsretningId 
-      ,{{ generate_Forca_surrogate_key( 'Momsgruppe' ) }}             as DimMomsgruppeId 
-      ,{{ generate_Forca_surrogate_key( 'Varemomsgruppe' ) }}         as DimVaremomsgruppeId 
-      ,case when Selskab != '1000' /*Andre selskaber end Forca ligger ikke i hierarkiet*/
-          then {{ generate_Forca_surrogate_key( '-1' ) }} 
-          else {{ generate_Forca_surrogate_key( 'AFDELINGVALUE' ) }} 
-       end                                                            As DimForcaAfdelingshierarkiId
-      ,{{ generate_Forca_surrogate_key( 'MainAccount' ) }}            As DimFinansSumkontoId
-      ,{{ generate_Forca_surrogate_key( 'KreditorBilagsnummer, KreditorSelskab' ) }} As DimKreditorId 
-      ,gjae.Bogfoeringsdato as DimBogfoeringsDatoId
-      ,gjae.RECID
-      ,gjae.FinansKonto
-      ,gjae.Posteringsbeloeb
-      ,gjae.Valutaposteringsbeloeb
-      ,gjae.Posteringstekst
-      ,gjae.ErKredit
-      ,gjae.ErKreditTekst
-      ,gjae.ErKorrektion    
-      ,gjae.ErKorrektionTekst  
-      ,gjae.PosteretAf
-      ,gjae.Kladdenummer
-      ,gjae.Bilagsnummer
-      ,gjae.Selskab
-      ,gjae.SCADeepLink                                                 as LinkTilBilag
-      ,gjae.SCASourceEntryId                                            as KildeindtastningsId
-      ,moms.Momsbeloeb
-      ,moms.IFM 
-      ,moms.Moms
-      ,moms.MomsValutakode  
-      ,gjae.Posteringsdato
-      ,gjae.Dokumentdato
-from GeneralJournalAccountEntry gjae 
-left join Moms 
-  on moms.GeneralJournalAccountEntry = gjae.RECID and TaxTransRelationship = 2 /* Vi vil kun finde moms information på grund beløbet */
-left join Projekt pj
-	on pj.ProjektId = gjae.PROJEKTVALUE
+/*
+════════════════════════════════════════════════════════════════════════════════
+Final SELECT: Dimension Keys & Measures
+════════════════════════════════════════════════════════════════════════════════
+*/
 
+SELECT
+    -- Dimension Keys
+    CASE
+        WHEN gjae.FinTag = -1
+        THEN {{ generate_Forca_surrogate_key('FinTag, null') }}
+        ELSE {{ generate_Forca_surrogate_key('FinTag, Selskab') }}
+    END AS DimFinanskoderId
+    ,{{ generate_Forca_surrogate_key('MainAccount') }} AS DimFinanskontoId
+    ,{{ generate_Forca_surrogate_key('ValutaKode') }} AS DimValutaId
+    ,{{ generate_Forca_surrogate_key('Bogfoeringstype') }} AS DimBogfoeringstypeId
+    ,{{ generate_Forca_surrogate_key('Posteringstype') }} AS DimFinansPosteringstypeId
+    ,{{ generate_Forca_surrogate_key('Posteringsperiodetype') }} AS DimFinansPosteringsPeriodetypeId
+    ,{{ generate_Forca_surrogate_key('AFDELINGVALUE') }} AS DimAfdelingId
+    ,{{ generate_Forca_surrogate_key('COSTCENTERVALUE') }} AS DimBaererId
+    ,{{ generate_Forca_surrogate_key('ProjektId') }} AS DimProjektId
+    ,{{ generate_Forca_surrogate_key('Selskab') }} AS DimJuridiskEnhedId
+    ,{{ generate_Forca_surrogate_key('Momskode') }} AS DimMomskodeId
+    ,{{ generate_Forca_surrogate_key('Momsretning') }} AS DimMomsretningId
+    ,{{ generate_Forca_surrogate_key('Momsgruppe') }} AS DimMomsgruppeId
+    ,{{ generate_Forca_surrogate_key('Varemomsgruppe') }} AS DimVaremomsgruppeId
+    -- Andre selskaber end Forca (1000) ligger ikke i hierarkiet
+    ,CASE
+        WHEN Selskab != '1000'
+        THEN {{ generate_Forca_surrogate_key('-1') }}
+        ELSE {{ generate_Forca_surrogate_key('AFDELINGVALUE') }}
+    END AS DimForcaAfdelingshierarkiId
+    ,{{ generate_Forca_surrogate_key('MainAccount') }} AS DimFinansSumkontoId
+    ,{{ generate_Forca_surrogate_key('KreditorBilagsnummer, KreditorSelskab') }} AS DimKreditorId
+    ,gjae.Bogfoeringsdato AS DimBogfoeringsDatoId
 
+    -- Degenerate Dimensions & Attributes
+    ,gjae.RECID
+    ,gjae.FinansKonto
+    ,gjae.Posteringstekst
+    ,gjae.ErKredit
+    ,gjae.ErKreditTekst
+    ,gjae.ErKorrektion
+    ,gjae.ErKorrektionTekst
+    ,gjae.PosteretAf
+    ,gjae.Kladdenummer
+    ,gjae.Bilagsnummer
+    ,gjae.Selskab
+    ,gjae.SCADeepLink AS LinkTilBilag
+    ,gjae.SCASourceEntryId AS KildeindtastningsId
+    ,gjae.Posteringsdato
+    ,gjae.Dokumentdato
 
- 
+    -- Measures
+    ,gjae.Posteringsbeloeb
+    ,gjae.Valutaposteringsbeloeb
+    ,moms.Momsbeloeb
+    ,moms.IFM
+    ,moms.Moms
+    ,moms.MomsValutakode
 
-
-       
+FROM GeneralJournalAccountEntry gjae
+LEFT JOIN Moms
+    ON moms.GeneralJournalAccountEntry = gjae.RECID
+    -- 2 = Tax on base amount (grund beløbet) - Vi vil kun finde moms information på grund beløbet
+    AND moms.TaxTransRelationship = 2
+LEFT JOIN Projekt pj
+    ON pj.ProjektId = gjae.PROJEKTVALUE
