@@ -1,6 +1,6 @@
 """
 Power BI Semantic Model Partition Refresh Script
-Refreshes all partitions for specified tables on the last day of every month
+Refreshes all partitions for specified tables when triggered by external scheduler
 Includes robust error handling, security best practices, and performance optimizations
 """
 
@@ -10,7 +10,6 @@ import json
 import logging
 import time
 from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -281,39 +280,17 @@ class PowerBIRefreshManager:
             logger.error(error_msg)
             return False, error_msg
 
-    def is_last_day_of_month(self) -> bool:
-        """
-        Check if today is the last day of the current month
-
-        Returns:
-            True if today is the last day of the month, False otherwise
-        """
-        today = datetime.now().date()
-        tomorrow = today + timedelta(days=1)
-        is_last_day = tomorrow.month != today.month
-
-        logger.info(f"Is last day of month: {is_last_day}")
-        return is_last_day
-
     def safe_refresh_workflow(
         self,
-        tables_and_partitions: List[Dict[str, any]],
-        force: bool = False
+        tables_and_partitions: List[Dict[str, any]]
     ) -> None:
         """
         Execute a safe refresh workflow with status checking
 
         Args:
             tables_and_partitions: List of tables/partitions to refresh
-            force: If True, skip the "last day of month" check
         """
         try:
-            # Check if it's the last day of the month (unless forced)
-            if not force and not self.is_last_day_of_month():
-                logger.info("Not the last day of the month. Skipping refresh.")
-                print("ℹ️  Not the last day of the month. Refresh skipped.")
-                return
-
             # Get latest refresh status
             logger.info("Checking latest refresh status...")
             status = self.get_latest_refresh_status()
@@ -377,11 +354,7 @@ def main():
         ]
 
         # Execute the safe refresh workflow
-        # Set force=True to run regardless of date (useful for testing)
-        manager.safe_refresh_workflow(
-            tables_and_partitions=tables_to_refresh,
-            force=False  # Set to True to bypass "last day of month" check
-        )
+        manager.safe_refresh_workflow(tables_and_partitions=tables_to_refresh)
 
     except Exception as e:
         logger.critical(f"Critical error in main execution: {str(e)}", exc_info=True)
