@@ -1,0 +1,28 @@
+{
+  "key_vault": {
+    "name": "tfa-kv-auth-DAP-0001",
+    "secrets": {
+      "client_id": "ta-DAP-SPrincipal01-id",
+      "client_secret": "ta-DAP-SPrincipal01-secret",
+      "tenant_id": "tenant-id",
+      "workspace_id": "pbi-workspace-id-finans",
+      "dataset_id": "pbi-dataset-id-finans"
+    }
+  },
+  "api": {
+    "timeout_seconds": 30,
+    "max_retries": 3,
+    "backoff_factor": 2
+  },
+  "refresh": {
+    "commit_mode": "transactional",
+    "refresh_type": "full",
+    "check_day_of_month": true
+  },
+  "tables_and_partitions": [
+    {
+      "table": "Finanspostering",
+      "comment": "Refresh entire table (no partition specified)"
+    }
+  ]
+}
