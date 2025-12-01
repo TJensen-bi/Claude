@@ -138,15 +138,11 @@ url = f"{base}/datasets/{dataset_id}/refreshes?$top=1"
 url = f"{base}/datasets/{dataset_id}/refreshes"
 ```
 
-### 2. **Last Day of Month Logic**
-- ✅ **Before**: Missing - claimed to run last day of month but had no logic
-- ✅ **After**: Implemented with date checking
-```python
-def is_last_day_of_month(self) -> bool:
-    today = datetime.now().date()
-    tomorrow = today + timedelta(days=1)
-    return tomorrow.month != today.month
-```
+### 2. **External Trigger Support**
+- ✅ **Before**: Had built-in date checking logic
+- ✅ **After**: Designed to be triggered by external schedulers (Azure Data Factory, Synapse, etc.)
+- ✅ Scheduling logic handled by the external trigger system
+- ✅ Script focuses purely on refresh execution
 
 ### 3. **Multiple Partition Support**
 - ✅ **Before**: Hardcoded single table, partition commented out
@@ -159,8 +155,8 @@ tables_to_refresh = [
 ```
 
 ### 4. **Configurable Behavior**
-- ✅ Force flag to bypass date checking (useful for testing)
 - ✅ Configurable commit modes and refresh types
+- ✅ Flexible table and partition specification
 - ✅ Easy to extend and maintain
 
 ---
@@ -238,7 +234,7 @@ BACKOFF_FACTOR = 2
 
 ## 📋 Usage Examples
 
-### Basic Usage (Last Day of Month Only)
+### Basic Usage
 ```python
 manager = PowerBIRefreshManager()
 
@@ -246,10 +242,7 @@ tables_to_refresh = [
     {"table": "Finanspostering"}
 ]
 
-manager.safe_refresh_workflow(
-    tables_and_partitions=tables_to_refresh,
-    force=False
-)
+manager.safe_refresh_workflow(tables_and_partitions=tables_to_refresh)
 ```
 
 ### Refresh Specific Partitions
@@ -261,14 +254,6 @@ tables_to_refresh = [
 ]
 
 manager.safe_refresh_workflow(tables_and_partitions=tables_to_refresh)
-```
-
-### Force Refresh (Bypass Date Check)
-```python
-manager.safe_refresh_workflow(
-    tables_and_partitions=tables_to_refresh,
-    force=True  # Runs regardless of date
-)
 ```
 
 ### Custom Refresh Type
@@ -297,33 +282,38 @@ success, message = manager.trigger_partition_refresh(
 
 ---
 
-## 📝 Scheduling Recommendations
+## 📝 External Trigger Setup
 
-### Option 1: Azure Data Factory
+This script is designed to be triggered by external schedulers. Here are common options:
+
+### Option 1: Azure Data Factory / Synapse Pipeline
 ```json
 {
-  "name": "PowerBI-Monthly-Refresh",
+  "name": "PowerBI-Partition-Refresh",
   "type": "SynapseNotebook",
   "notebook": "powerbi_partition_refresh",
   "schedule": {
     "recurrence": {
-      "frequency": "Day",
+      "frequency": "Month",
       "interval": 1
     }
   }
 }
 ```
 
+For last-day-of-month triggers in Synapse:
+- Create pipeline with Notebook activity
+- Add a condition: `@equals(formatDateTime(addDays(utcNow(), 1), 'dd'), '01')`
+- Schedule daily, executes only when condition is true
+
 ### Option 2: Azure Automation
 - Create Automation Account
 - Import script as Runbook
-- Schedule with monthly recurrence
-- Set to run on last day of month
+- Configure schedule trigger based on your requirements
+- Runbook will execute the notebook when triggered
 
-### Option 3: Synapse Pipeline
-- Create pipeline with Notebook activity
-- Use expression: `@equals(formatDateTime(addDays(utcNow(), 1), 'dd'), '01')`
-- Schedule daily, runs only on last day of month
+### Option 3: Manual Trigger
+Simply execute the notebook/script when needed - all execution logic is self-contained
 
 ---
 
@@ -377,7 +367,7 @@ Error: HTTP error: 400 - Bad Request (partition not found)
 | Token validation | ❌ No | ✓ Yes |
 | Timeout protection | ❌ No | ✓ 30s timeout |
 | Connection pooling | ❌ No | ✓ Yes |
-| Date checking | ❌ Missing | ✓ Implemented |
+| External trigger support | ❌ No | ✓ Yes (ADF/Synapse) |
 | Multiple partitions | ❌ No | ✓ Yes |
 | Type hints | ❌ No | ✓ Yes |
 | Documentation | ❌ Minimal | ✓ Comprehensive |
