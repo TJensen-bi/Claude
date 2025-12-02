@@ -12,6 +12,7 @@ import time
 from typing import Dict, List, Optional, Tuple
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
@@ -19,6 +20,250 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+class EmailNotifier:
+    """Handles email notifications via Microsoft Graph API for Outlook/Microsoft 365"""
+
+    GRAPH_API_ENDPOINT = "https://graph.microsoft.com/v1.0/me/sendMail"
+    REQUEST_TIMEOUT = 30
+
+    def __init__(self, enable_notifications: bool = True):
+        """
+        Initialize the email notifier
+
+        Args:
+            enable_notifications: Whether to enable email notifications
+        """
+        self.enable_notifications = enable_notifications
+        self.access_token = None
+        self.recipients = []
+
+        if self.enable_notifications:
+            self._initialize_email_config()
+
+    def _initialize_email_config(self) -> None:
+        """Retrieve email configuration from Azure Key Vault"""
+        try:
+            # Retrieve email settings from Key Vault
+            # Expected format: comma-separated email addresses
+            recipients_str = self._get_secret("tfa-kv-auth-DAP-0001", "pbi-notification-recipients")
+            self.recipients = [email.strip() for email in recipients_str.split(",") if email.strip()]
+
+            # Retrieve Graph API credentials
+            self.email_client_id = self._get_secret("tfa-kv-auth-DAP-0001", "pbi-email-client-id")
+            self.email_client_secret = self._get_secret("tfa-kv-auth-DAP-0001", "pbi-email-client-secret")
+            self.email_tenant_id = self._get_secret("tfa-kv-auth-DAP-0001", "pbi-email-tenant-id")
+            self.sender_email = self._get_secret("tfa-kv-auth-DAP-0001", "pbi-sender-email")
+
+            if not self.recipients:
+                logger.warning("No email recipients configured. Notifications will be disabled.")
+                self.enable_notifications = False
+                return
+
+            logger.info(f"Email notifications configured for {len(self.recipients)} recipient(s)")
+
+        except Exception as e:
+            logger.warning(f"Failed to retrieve email configuration: {str(e)}. Email notifications will be disabled.")
+            self.enable_notifications = False
+
+    def _get_secret(self, vault_name: str, secret_name: str) -> str:
+        """
+        Retrieve secret from Azure Key Vault
+
+        Args:
+            vault_name: Name of the Key Vault
+            secret_name: Name of the secret to retrieve
+
+        Returns:
+            The secret value
+        """
+        try:
+            secret = mssparkutils.credentials.getSecret(vault_name, secret_name)
+            if not secret:
+                raise ValueError(f"Secret '{secret_name}' is empty")
+            return secret
+        except Exception as e:
+            logger.error(f"Error retrieving secret '{secret_name}': {str(e)}")
+            raise
+
+    def _acquire_graph_token(self) -> str:
+        """
+        Acquire OAuth2 access token for Microsoft Graph API
+
+        Returns:
+            Valid access token
+        """
+        try:
+            authority_url = f"https://login.microsoftonline.com/{self.email_tenant_id}"
+            scope = ["https://graph.microsoft.com/.default"]
+
+            app = msal.ConfidentialClientApplication(
+                self.email_client_id,
+                authority=authority_url,
+                client_credential=self.email_client_secret
+            )
+
+            result = app.acquire_token_for_client(scopes=scope)
+
+            if 'access_token' not in result:
+                error_desc = result.get('error_description', 'Unknown error')
+                raise Exception(f"Token acquisition failed: {error_desc}")
+
+            logger.info("Successfully acquired Graph API access token")
+            return result['access_token']
+
+        except Exception as e:
+            logger.error(f"Failed to acquire Graph API token: {str(e)}")
+            raise
+
+    def _create_email_body(
+        self,
+        status: str,
+        tables_refreshed: List[Dict[str, any]],
+        message: str,
+        error_details: Optional[str] = None
+    ) -> str:
+        """
+        Create HTML email body with refresh details
+
+        Args:
+            status: Status of the refresh (Success/Failed)
+            tables_refreshed: List of tables/partitions that were refreshed
+            message: Status message
+            error_details: Optional error details for failures
+
+        Returns:
+            HTML formatted email body
+        """
+        status_color = "#28a745" if status == "Success" else "#dc3545"
+        status_icon = "✓" if status == "Success" else "✗"
+
+        tables_html = "<ul>"
+        for item in tables_refreshed:
+            table_name = item.get('table', 'Unknown')
+            partition = item.get('partition', 'All partitions')
+            tables_html += f"<li><strong>{table_name}</strong>"
+            if partition != 'All partitions':
+                tables_html += f" - Partition: {partition}"
+            tables_html += "</li>"
+        tables_html += "</ul>"
+
+        error_section = ""
+        if error_details:
+            error_section = f"""
+            <div style="background-color: #f8d7da; border-left: 4px solid #dc3545; padding: 12px; margin-top: 15px;">
+                <h3 style="color: #721c24; margin-top: 0;">Error Details:</h3>
+                <pre style="white-space: pre-wrap; word-wrap: break-word;">{error_details}</pre>
+            </div>
+            """
+
+        html_body = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background-color: {status_color}; color: white; padding: 20px; border-radius: 5px 5px 0 0; }}
+                .content {{ background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; border-radius: 0 0 5px 5px; }}
+                .info-box {{ background-color: white; padding: 15px; margin: 10px 0; border-radius: 5px; border: 1px solid #e0e0e0; }}
+                h1 {{ margin: 0; font-size: 24px; }}
+                h3 {{ color: #555; margin-top: 0; }}
+                .timestamp {{ color: #666; font-size: 14px; margin-top: 10px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>{status_icon} Power BI Refresh {status}</h1>
+                    <div class="timestamp">Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div>
+                </div>
+                <div class="content">
+                    <div class="info-box">
+                        <h3>Status Message:</h3>
+                        <p>{message}</p>
+                    </div>
+                    <div class="info-box">
+                        <h3>Tables/Partitions Refreshed:</h3>
+                        {tables_html}
+                    </div>
+                    {error_section}
+                    <p style="color: #666; font-size: 12px; margin-top: 20px;">
+                        This is an automated notification from the Power BI Partition Refresh service.
+                    </p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+        return html_body
+
+    def send_notification(
+        self,
+        success: bool,
+        tables_refreshed: List[Dict[str, any]],
+        message: str,
+        error_details: Optional[str] = None
+    ) -> None:
+        """
+        Send email notification about refresh status
+
+        Args:
+            success: Whether the refresh was successful
+            tables_refreshed: List of tables/partitions that were refreshed
+            message: Status message
+            error_details: Optional error details for failures
+        """
+        if not self.enable_notifications:
+            logger.info("Email notifications are disabled. Skipping notification.")
+            return
+
+        try:
+            # Acquire access token
+            if not self.access_token:
+                self.access_token = self._acquire_graph_token()
+
+            # Prepare email content
+            status = "Success" if success else "Failed"
+            subject = f"Power BI Refresh {status} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            body_html = self._create_email_body(status, tables_refreshed, message, error_details)
+
+            # Build recipients list
+            to_recipients = [{"emailAddress": {"address": email}} for email in self.recipients]
+
+            # Create email message
+            email_message = {
+                "message": {
+                    "subject": subject,
+                    "body": {
+                        "contentType": "HTML",
+                        "content": body_html
+                    },
+                    "toRecipients": to_recipients
+                },
+                "saveToSentItems": "true"
+            }
+
+            # Send email via Graph API
+            headers = {
+                "Authorization": f"Bearer {self.access_token}",
+                "Content-Type": "application/json"
+            }
+
+            response = requests.post(
+                self.GRAPH_API_ENDPOINT,
+                headers=headers,
+                json=email_message,
+                timeout=self.REQUEST_TIMEOUT
+            )
+
+            response.raise_for_status()
+            logger.info(f"Email notification sent successfully to {len(self.recipients)} recipient(s)")
+
+        except Exception as e:
+            # Don't fail the entire workflow if email fails
+            logger.error(f"Failed to send email notification: {str(e)}")
 
 
 class PowerBIRefreshManager:
@@ -282,14 +527,17 @@ class PowerBIRefreshManager:
 
     def safe_refresh_workflow(
         self,
-        tables_and_partitions: List[Dict[str, any]]
+        tables_and_partitions: List[Dict[str, any]],
+        email_notifier: Optional[EmailNotifier] = None
     ) -> None:
         """
-        Execute a safe refresh workflow with status checking
+        Execute a safe refresh workflow with status checking and email notifications
 
         Args:
             tables_and_partitions: List of tables/partitions to refresh
+            email_notifier: Optional EmailNotifier instance for sending notifications
         """
+        error_details = None
         try:
             # Get latest refresh status
             logger.info("Checking latest refresh status...")
@@ -324,13 +572,41 @@ class PowerBIRefreshManager:
             if success:
                 print(f"✓ {message}")
                 logger.info("Refresh workflow completed successfully")
+
+                # Send success notification
+                if email_notifier:
+                    email_notifier.send_notification(
+                        success=True,
+                        tables_refreshed=tables_and_partitions,
+                        message=message
+                    )
             else:
                 print(f"❌ {message}")
                 logger.error("Refresh workflow failed")
+                error_details = message
+
+                # Send failure notification
+                if email_notifier:
+                    email_notifier.send_notification(
+                        success=False,
+                        tables_refreshed=tables_and_partitions,
+                        message=message,
+                        error_details=error_details
+                    )
 
         except Exception as e:
-            logger.error(f"Error in refresh workflow: {str(e)}", exc_info=True)
+            error_msg = f"Error in refresh workflow: {str(e)}"
+            logger.error(error_msg, exc_info=True)
             print(f"❌ Fatal error: {str(e)}")
+
+            # Send failure notification for exceptions
+            if email_notifier:
+                email_notifier.send_notification(
+                    success=False,
+                    tables_refreshed=tables_and_partitions,
+                    message="Fatal error occurred during refresh workflow",
+                    error_details=str(e)
+                )
             raise
 
 
@@ -339,6 +615,9 @@ def main():
     try:
         # Initialize the refresh manager
         manager = PowerBIRefreshManager()
+
+        # Initialize email notifier (set to False to disable notifications)
+        email_notifier = EmailNotifier(enable_notifications=True)
 
         # Define tables and partitions to refresh
         # For all partitions in a table, omit the 'partition' key
@@ -353,8 +632,11 @@ def main():
             # {"table": "AnotherTable", "partition": "2025Q301"}
         ]
 
-        # Execute the safe refresh workflow
-        manager.safe_refresh_workflow(tables_and_partitions=tables_to_refresh)
+        # Execute the safe refresh workflow with email notifications
+        manager.safe_refresh_workflow(
+            tables_and_partitions=tables_to_refresh,
+            email_notifier=email_notifier
+        )
 
     except Exception as e:
         logger.critical(f"Critical error in main execution: {str(e)}", exc_info=True)
