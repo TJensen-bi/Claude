@@ -1,9 +1,3 @@
-"""
-Power BI Semantic Model Partition Refresh Script
-Refreshes all partitions for specified tables when triggered by external scheduler
-Includes robust error handling, security best practices, and performance optimizations
-"""
-
 import msal
 import requests
 import json
@@ -14,6 +8,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 # Configure logging
+
+"""
+Denne del konfigurerer hvordan logningssystemet skal registrere beskeder med et bestemt format og niveau, og opretter en logger, der kan bruges til at logge beskeder i programmet. 
+"""
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -22,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class PowerBIRefreshManager:
-    """Manages Power BI semantic model partition refreshes with error handling and security"""
+    """Håndtering af Finans modellens partition processering"""
 
     # Constants
     REQUEST_TIMEOUT = 30  # seconds
@@ -30,62 +28,60 @@ class PowerBIRefreshManager:
     BACKOFF_FACTOR = 2
 
     def __init__(self):
-        """Initialize the refresh manager with secure credential retrieval"""
+        """Initialiser opdateringshåndteringen med hentning af legitimationsoplysninger"""
         self.access_token = None
         self.workspace_id = None
         self.dataset_id = None
         self._initialize_credentials()
 
     def _initialize_credentials(self) -> None:
-        """Securely retrieve and validate credentials from Azure Key Vault"""
+        """Sikkert hente og validere credentials fra AKV"""
         try:
-            # Retrieve secrets from Azure Key Vault
-            self.client_id = self._get_secret("tfa-kv-auth-DAP-0001", "ta-DAP-SPrincipal01-id")
-            self.client_secret = self._get_secret("tfa-kv-auth-DAP-0001", "ta-DAP-SPrincipal01-secret")
-            self.tenant_id = self._get_secret("tfa-kv-auth-DAP-0001", "tenant-id")
-            self.workspace_id = self._get_secret("tfa-kv-auth-DAP-0001", "pbi-workspace-id-finans")
-            self.dataset_id = self._get_secret("tfa-kv-auth-DAP-0001", "pbi-dataset-id-finans")
+            # Hente secrets fra Azure Key Vault
+            self.client_id = self._get_secret("dfa-kv-auth-DAP-0001", "da-DAP-SPrincipal01-id")
+            self.client_secret = self._get_secret("dfa-kv-auth-DAP-0001", "da-DAP-SPrincipal01-secret")
+            self.tenant_id = self._get_secret("dfa-kv-auth-DAP-0001", "tenant-id")
+            self.workspace_id = self._get_secret("dfa-kv-auth-DAP-0001", "pbi-workspace-id-finans")
+            self.dataset_id = self._get_secret("dfa-kv-auth-DAP-0001", "pbi-dataset-id-finans")
 
-            # Validate all credentials are retrieved
+            # Valider om alle credentials er modtaget
             if not all([self.client_id, self.client_secret, self.tenant_id,
                        self.workspace_id, self.dataset_id]):
-                raise ValueError("One or more required secrets are missing or empty")
+                raise ValueError("En eller flere secrets er ikke modtaget")
 
-            logger.info("Successfully retrieved all credentials from Key Vault")
+            logger.info("Alle credentials er hentet fra AKV")
 
         except Exception as e:
-            logger.error(f"Failed to retrieve credentials: {str(e)}")
+            logger.error(f"Fejlet i at hente credentials: {str(e)}")
             raise
 
     def _get_secret(self, vault_name: str, secret_name: str) -> str:
         """
-        Safely retrieve secret from Azure Key Vault with validation
+        Henter secrets fra AKV med validering
 
         Args:
-            vault_name: Name of the Key Vault
-            secret_name: Name of the secret to retrieve
+            vault_name: Navnet på en AKV
+            secret_name: Navnet på en secret
 
-        Returns:
-            The secret value
+        Return:
+            Secret værdien
 
         Raises:
-            ValueError: If secret is empty or None
+            ValueError: Hvis secret er tom eller none
         """
         try:
             secret = mssparkutils.credentials.getSecret(vault_name, secret_name)
             if not secret:
-                raise ValueError(f"Secret '{secret_name}' is empty")
+                raise ValueError(f"Secret '{secret_name}' er tom")
             return secret
         except Exception as e:
-            logger.error(f"Error retrieving secret '{secret_name}': {str(e)}")
+            logger.error(f"Fejl vedrørende secret '{secret_name}': {str(e)}")
             raise
 
     def _create_session(self) -> requests.Session:
         """
-        Create a requests session with retry logic and connection pooling
-
-        Returns:
-            Configured requests Session object
+        opretter en HTTP-session med retry-logik og forbindelsespuljering, hvilket forbedrer ydeevnen. 
+        Funktionen sikrer, at forespørgsler automatisk forsøges igen i tilfælde af visse fejl, og at forbindelser genbruges effektivt.
         """
         session = requests.Session()
 
@@ -105,13 +101,8 @@ class PowerBIRefreshManager:
 
     def _acquire_access_token(self) -> str:
         """
-        Acquire OAuth2 access token with validation
-
-        Returns:
-            Valid access token
-
-        Raises:
-            Exception: If token acquisition fails
+        Henter og validerer en OAuth2-adgangstoken. 
+        Funktionen sikrer, at token hentes korrekt og håndterer eventuelle fejl, der opstår under processen, ved at logge og genkaste undtagelser.
         """
         try:
             authority_url = f"https://login.microsoftonline.com/{self.tenant_id}"
@@ -140,10 +131,8 @@ class PowerBIRefreshManager:
 
     def _get_headers(self) -> Dict[str, str]:
         """
-        Get HTTP headers with fresh access token
-
-        Returns:
-            Dictionary of HTTP headers
+        Sikrer, at en adgangstoken er tilgængelig og genererer de nødvendige HTTP-headers til autentificerede API-forespørgsler. 
+        Foretager håndterering vedrørende hentning af adgangstokenen, hvis den ikke allerede er tilgængelig, og returnerer en korrekt konfigureret header-ordbog.
         """
         if not self.access_token:
             self.access_token = self._acquire_access_token()
@@ -155,10 +144,10 @@ class PowerBIRefreshManager:
 
     def get_latest_refresh_status(self) -> Optional[str]:
         """
-        Get the status of the most recent dataset refresh
+        Henter status fra den seneste data refresh.
 
         Returns:
-            Status string (e.g., 'Completed', 'Failed', 'Unknown') or None if no refresh history
+            Status string (e.g., 'Completed', 'Failed', 'Unknown') or None hvis der ikke har været nogle tidligere refresh.
         """
         try:
             url = (f"https://api.powerbi.com/v1.0/myorg/groups/{self.workspace_id}/"
@@ -179,27 +168,27 @@ class PowerBIRefreshManager:
 
             # Validate response structure
             if 'value' not in data or not data['value']:
-                logger.warning("No refresh history found for dataset")
+                logger.warning("Ingen tidligere refresh historie for Finans")
                 return None
 
             status = data['value'][0].get('status', 'Unknown')
-            logger.info(f"Latest refresh status: {status}")
+            logger.info(f"Sidste refresh status: {status}")
 
             # Log additional details for failed refreshes
             if status == 'Failed':
                 error_info = data['value'][0].get('serviceExceptionJson', 'No error details available')
-                logger.error(f"Refresh failure details: {error_info}")
+                logger.error(f"Refresh fejl: {error_info}")
 
             return status
 
         except requests.exceptions.Timeout:
-            logger.error("Request timeout while checking refresh status")
+            logger.error("Request er gået i timeout mens tjek for refresh status")
             raise
         except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTP error while checking refresh status: {e.response.status_code} - {e.response.text}")
+            logger.error(f"HTTP fejl mens der blev tjekket for refresh status: {e.response.status_code} - {e.response.text}")
             raise
         except Exception as e:
-            logger.error(f"Unexpected error while checking refresh status: {str(e)}")
+            logger.error(f"Uventet fejl mens der blev tjekket for refresh status: {str(e)}")
             raise
 
     def trigger_partition_refresh(
@@ -209,7 +198,7 @@ class PowerBIRefreshManager:
         refresh_type: str = "full"
     ) -> Tuple[bool, str]:
         """
-        Trigger a refresh for specific partitions
+        Trigger en specifik partition
 
         Args:
             tables_and_partitions: List of dicts with 'table' and optional 'partition' keys
@@ -223,14 +212,14 @@ class PowerBIRefreshManager:
         try:
             # Validate inputs
             if not tables_and_partitions:
-                raise ValueError("tables_and_partitions cannot be empty")
+                raise ValueError("Tabeller og partitioner må ikke være tomme")
 
             if commit_mode not in ["transactional", "partialBatch"]:
-                raise ValueError(f"Invalid commit_mode: {commit_mode}")
+                raise ValueError(f"Ugyldig commit_mode: {commit_mode}")
 
             valid_types = ["full", "automatic", "dataOnly", "calculate", "clearValues"]
             if refresh_type not in valid_types:
-                raise ValueError(f"Invalid refresh_type: {refresh_type}")
+                raise ValueError(f"Ugyldig refresh_type: {refresh_type}")
 
             # Build refresh request body
             body = {
@@ -244,7 +233,7 @@ class PowerBIRefreshManager:
             url = (f"https://api.powerbi.com/v1.0/myorg/groups/{self.workspace_id}/"
                    f"datasets/{self.dataset_id}/refreshes")
 
-            logger.info(f"Triggering refresh for {len(tables_and_partitions)} table(s)/partition(s)")
+            logger.info(f"Aktivere refresh for {len(tables_and_partitions)} table(s)/partition(s)")
             logger.debug(f"Refresh body: {json.dumps(body, indent=2)}")
 
             session = self._create_session()
@@ -261,11 +250,11 @@ class PowerBIRefreshManager:
 
             # 202 Accepted is the expected response for async refresh operations
             if response.status_code == 202:
-                logger.info("Refresh request accepted successfully")
-                return True, "Refresh triggered successfully"
+                logger.info("Refresh request er accepteret successfuldt")
+                return True, "Refresh er aktiveret successfuldt"
             else:
-                logger.warning(f"Unexpected status code: {response.status_code}")
-                return True, f"Refresh triggered with status code: {response.status_code}"
+                logger.warning(f"Uventet status kode: {response.status_code}")
+                return True, f"Refresh triggered med status kode: {response.status_code}"
 
         except requests.exceptions.Timeout:
             error_msg = "Request timeout while triggering refresh"
@@ -285,7 +274,7 @@ class PowerBIRefreshManager:
         tables_and_partitions: List[Dict[str, any]]
     ) -> None:
         """
-        Execute a safe refresh workflow with status checking
+        Aktivering af refresh med statuscheck
 
         Args:
             tables_and_partitions: List of tables/partitions to refresh
