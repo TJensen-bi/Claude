@@ -257,15 +257,15 @@ class PowerBIRefreshManager:
                 return True, f"Refresh triggered med status kode: {response.status_code}"
 
         except requests.exceptions.Timeout:
-            error_msg = "Request timeout while triggering refresh"
+            error_msg = "Din request er gået i timeout mens den forsøgte at trigger refresh"
             logger.error(error_msg)
             return False, error_msg
         except requests.exceptions.HTTPError as e:
-            error_msg = f"HTTP error while triggering refresh: {e.response.status_code} - {e.response.text}"
+            error_msg = f"HTTP fejl er opstået mens den forsøgte at trigger refresh: {e.response.status_code} - {e.response.text}"
             logger.error(error_msg)
             return False, error_msg
         except Exception as e:
-            error_msg = f"Unexpected error while triggering refresh: {str(e)}"
+            error_msg = f"Uventet fejl mens den forsøgte at trigger refresh: {str(e)}"
             logger.error(error_msg)
             return False, error_msg
 
@@ -307,19 +307,19 @@ class PowerBIRefreshManager:
                 print(f"⚠️  Unknown status: {status}")
 
             # Trigger the refresh
-            print(f"🔄 Triggering refresh for {len(tables_and_partitions)} table(s)/partition(s)...")
+            print(f"🔄 Aktivering af refresh for {len(tables_and_partitions)} table(s)/partition(s)...")
             success, message = self.trigger_partition_refresh(tables_and_partitions)
 
             if success:
                 print(f"✓ {message}")
-                logger.info("Refresh workflow completed successfully")
+                logger.info("Refresh workflow er udført")
             else:
                 print(f"❌ {message}")
-                logger.error("Refresh workflow failed")
+                logger.error("Refresh workflow er fejlet")
 
         except Exception as e:
-            logger.error(f"Error in refresh workflow: {str(e)}", exc_info=True)
-            print(f"❌ Fatal error: {str(e)}")
+            logger.error(f"Fejl i refresh workflow: {str(e)}", exc_info=True)
+            print(f"❌ Fatal fejl: {str(e)}")
             raise
 
 
@@ -346,8 +346,8 @@ def main():
         manager.safe_refresh_workflow(tables_and_partitions=tables_to_refresh)
 
     except Exception as e:
-        logger.critical(f"Critical error in main execution: {str(e)}", exc_info=True)
-        print(f"❌ Critical error: {str(e)}")
+        logger.critical(f"Kritisk fejl under main eksekvering: {str(e)}", exc_info=True)
+        print(f"❌ Kritisk fejl: {str(e)}")
         raise
 
 
