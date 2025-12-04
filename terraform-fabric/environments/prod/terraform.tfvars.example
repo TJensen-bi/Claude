@@ -1,0 +1,55 @@
+# Production Environment Configuration
+# Copy this file to terraform.tfvars and update with your values
+
+environment = "prod"
+location    = "westeurope"
+capacity_id = "your-prod-fabric-capacity-id"
+
+# Production workspaces
+workspaces = {
+  "prod-data-engineering" = {
+    display_name = "PROD - Data Engineering"
+    description  = "Production workspace for data engineering"
+  }
+  "prod-analytics" = {
+    display_name = "PROD - Analytics"
+    description  = "Production workspace for analytics"
+  }
+}
+
+# Production lakehouses (medallion architecture)
+lakehouses = {
+  "prod-bronze" = {
+    display_name = "PROD Bronze Lakehouse"
+    description  = "Production raw data lakehouse"
+    workspace_id = "reference-workspace-id-here"
+  }
+  "prod-silver" = {
+    display_name = "PROD Silver Lakehouse"
+    description  = "Production curated data lakehouse"
+    workspace_id = "reference-workspace-id-here"
+  }
+  "prod-gold" = {
+    display_name = "PROD Gold Lakehouse"
+    description  = "Production business-ready data lakehouse"
+    workspace_id = "reference-workspace-id-here"
+  }
+}
+
+# Production warehouses
+warehouses = {
+  "prod-warehouse" = {
+    display_name = "PROD Enterprise Data Warehouse"
+    description  = "Production enterprise data warehouse"
+    workspace_id = "reference-workspace-id-here"
+  }
+}
+
+# Tags for prod environment
+tags = {
+  managed_by  = "terraform"
+  environment = "prod"
+  project     = "fabric-infrastructure"
+  cost_center = "production"
+  criticality = "high"
+}
