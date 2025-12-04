@@ -1,0 +1,44 @@
+# Development Environment Configuration
+# Copy this file to terraform.tfvars and update with your values
+
+environment = "dev"
+location    = "westeurope"
+capacity_id = "your-dev-fabric-capacity-id"
+
+# Development workspaces
+workspaces = {
+  "dev-data-engineering" = {
+    display_name = "DEV - Data Engineering"
+    description  = "Development workspace for data engineering"
+  }
+  "dev-analytics" = {
+    display_name = "DEV - Analytics"
+    description  = "Development workspace for analytics"
+  }
+}
+
+# Development lakehouses
+lakehouses = {
+  "dev-bronze" = {
+    display_name = "DEV Bronze Lakehouse"
+    description  = "Development raw data lakehouse"
+    workspace_id = "reference-workspace-id-here"
+  }
+}
+
+# Development warehouses
+warehouses = {
+  "dev-warehouse" = {
+    display_name = "DEV Data Warehouse"
+    description  = "Development data warehouse"
+    workspace_id = "reference-workspace-id-here"
+  }
+}
+
+# Tags for dev environment
+tags = {
+  managed_by  = "terraform"
+  environment = "dev"
+  project     = "fabric-infrastructure"
+  cost_center = "development"
+}

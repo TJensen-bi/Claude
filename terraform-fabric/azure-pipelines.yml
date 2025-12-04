@@ -1,0 +1,271 @@
+# Azure DevOps Pipeline for Terraform Fabric
+# This pipeline validates, plans, and applies Terraform configurations
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - terraform-fabric/**
+      - azure-pipelines.yml
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - terraform-fabric/**
+      - azure-pipelines.yml
+
+variables:
+  - name: terraformVersion
+    value: '1.9.0'
+  - name: workingDirectory
+    value: '$(System.DefaultWorkingDirectory)/terraform-fabric'
+
+stages:
+  - stage: Validate
+    displayName: 'Terraform Validate'
+    jobs:
+      - job: ValidateTerraform
+        displayName: 'Validate Terraform Code'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - checkout: self
+
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: $(terraformVersion)
+
+          - task: TerraformCLI@1
+            displayName: 'Terraform Format Check'
+            inputs:
+              command: 'fmt'
+              workingDirectory: $(workingDirectory)
+              commandOptions: '-check -recursive'
+            continueOnError: true
+
+          - task: TerraformCLI@1
+            displayName: 'Terraform Init (Backend False)'
+            inputs:
+              command: 'init'
+              workingDirectory: $(workingDirectory)
+              commandOptions: '-backend=false'
+
+          - task: TerraformCLI@1
+            displayName: 'Terraform Validate'
+            inputs:
+              command: 'validate'
+              workingDirectory: $(workingDirectory)
+
+  - stage: PlanDev
+    displayName: 'Plan Dev Environment'
+    dependsOn: Validate
+    condition: succeeded()
+    jobs:
+      - job: PlanDevEnvironment
+        displayName: 'Terraform Plan - Dev'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - checkout: self
+
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: $(terraformVersion)
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Init - Dev'
+            inputs:
+              azureSubscription: 'Azure-Service-Connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                cd $(workingDirectory)/environments/dev
+                terraform init
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Plan - Dev'
+            inputs:
+              azureSubscription: 'Azure-Service-Connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                cd $(workingDirectory)/environments/dev
+                terraform plan -out=tfplan
+            env:
+              FABRIC_TENANT_ID: $(FABRIC_TENANT_ID)
+              FABRIC_CLIENT_ID: $(FABRIC_CLIENT_ID)
+              FABRIC_CLIENT_SECRET: $(FABRIC_CLIENT_SECRET)
+              TF_VAR_capacity_id: $(DEV_FABRIC_CAPACITY_ID)
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Dev Plan'
+            inputs:
+              targetPath: '$(workingDirectory)/environments/dev/tfplan'
+              artifact: 'tfplan-dev'
+              publishLocation: 'pipeline'
+
+  - stage: PlanProd
+    displayName: 'Plan Prod Environment'
+    dependsOn: Validate
+    condition: succeeded()
+    jobs:
+      - job: PlanProdEnvironment
+        displayName: 'Terraform Plan - Prod'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - checkout: self
+
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: $(terraformVersion)
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Init - Prod'
+            inputs:
+              azureSubscription: 'Azure-Service-Connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                cd $(workingDirectory)/environments/prod
+                terraform init
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Plan - Prod'
+            inputs:
+              azureSubscription: 'Azure-Service-Connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                cd $(workingDirectory)/environments/prod
+                terraform plan -out=tfplan
+            env:
+              FABRIC_TENANT_ID: $(FABRIC_TENANT_ID)
+              FABRIC_CLIENT_ID: $(FABRIC_CLIENT_ID)
+              FABRIC_CLIENT_SECRET: $(FABRIC_CLIENT_SECRET)
+              TF_VAR_capacity_id: $(PROD_FABRIC_CAPACITY_ID)
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Prod Plan'
+            inputs:
+              targetPath: '$(workingDirectory)/environments/prod/tfplan'
+              artifact: 'tfplan-prod'
+              publishLocation: 'pipeline'
+
+  - stage: ApplyDev
+    displayName: 'Apply Dev Environment'
+    dependsOn: PlanDev
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: ApplyDevEnvironment
+        displayName: 'Terraform Apply - Dev'
+        environment: 'dev'
+        pool:
+          vmImage: 'ubuntu-latest'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: TerraformInstaller@1
+                  displayName: 'Install Terraform'
+                  inputs:
+                    terraformVersion: $(terraformVersion)
+
+                - task: DownloadPipelineArtifact@2
+                  displayName: 'Download Dev Plan'
+                  inputs:
+                    buildType: 'current'
+                    artifactName: 'tfplan-dev'
+                    targetPath: '$(workingDirectory)/environments/dev'
+
+                - task: AzureCLI@2
+                  displayName: 'Terraform Init - Dev'
+                  inputs:
+                    azureSubscription: 'Azure-Service-Connection'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      cd $(workingDirectory)/environments/dev
+                      terraform init
+
+                - task: AzureCLI@2
+                  displayName: 'Terraform Apply - Dev'
+                  inputs:
+                    azureSubscription: 'Azure-Service-Connection'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      cd $(workingDirectory)/environments/dev
+                      terraform apply -auto-approve tfplan
+                  env:
+                    FABRIC_TENANT_ID: $(FABRIC_TENANT_ID)
+                    FABRIC_CLIENT_ID: $(FABRIC_CLIENT_ID)
+                    FABRIC_CLIENT_SECRET: $(FABRIC_CLIENT_SECRET)
+                    TF_VAR_capacity_id: $(DEV_FABRIC_CAPACITY_ID)
+
+  - stage: ApplyProd
+    displayName: 'Apply Prod Environment'
+    dependsOn:
+      - PlanProd
+      - ApplyDev
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: ApplyProdEnvironment
+        displayName: 'Terraform Apply - Prod'
+        environment: 'prod'
+        pool:
+          vmImage: 'ubuntu-latest'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: TerraformInstaller@1
+                  displayName: 'Install Terraform'
+                  inputs:
+                    terraformVersion: $(terraformVersion)
+
+                - task: DownloadPipelineArtifact@2
+                  displayName: 'Download Prod Plan'
+                  inputs:
+                    buildType: 'current'
+                    artifactName: 'tfplan-prod'
+                    targetPath: '$(workingDirectory)/environments/prod'
+
+                - task: AzureCLI@2
+                  displayName: 'Terraform Init - Prod'
+                  inputs:
+                    azureSubscription: 'Azure-Service-Connection'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      cd $(workingDirectory)/environments/prod
+                      terraform init
+
+                - task: AzureCLI@2
+                  displayName: 'Terraform Apply - Prod'
+                  inputs:
+                    azureSubscription: 'Azure-Service-Connection'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      cd $(workingDirectory)/environments/prod
+                      terraform apply -auto-approve tfplan
+                  env:
+                    FABRIC_TENANT_ID: $(FABRIC_TENANT_ID)
+                    FABRIC_CLIENT_ID: $(FABRIC_CLIENT_ID)
+                    FABRIC_CLIENT_SECRET: $(FABRIC_CLIENT_SECRET)
+                    TF_VAR_capacity_id: $(PROD_FABRIC_CAPACITY_ID)

@@ -1,0 +1,81 @@
+# Copy this file to terraform.tfvars and update with your values
+
+environment = "dev"
+location    = "westeurope"
+capacity_id = "your-fabric-capacity-id"
+
+# Workspaces configuration
+workspaces = {
+  "data-engineering" = {
+    display_name = "Data Engineering Workspace"
+    description  = "Workspace for data engineering workloads"
+  }
+  "analytics" = {
+    display_name = "Analytics Workspace"
+    description  = "Workspace for analytics and reporting"
+  }
+}
+
+# Lakehouses configuration
+lakehouses = {
+  "bronze" = {
+    display_name = "Bronze Lakehouse"
+    description  = "Raw data lakehouse"
+    workspace_id = "will-be-created-by-module"
+  }
+  "silver" = {
+    display_name = "Silver Lakehouse"
+    description  = "Cleaned and curated data lakehouse"
+    workspace_id = "will-be-created-by-module"
+  }
+  "gold" = {
+    display_name = "Gold Lakehouse"
+    description  = "Business-ready data lakehouse"
+    workspace_id = "will-be-created-by-module"
+  }
+}
+
+# Warehouses configuration
+warehouses = {
+  "enterprise-dw" = {
+    display_name = "Enterprise Data Warehouse"
+    description  = "Enterprise data warehouse for analytics"
+    workspace_id = "will-be-created-by-module"
+  }
+}
+
+# Notebooks configuration
+notebooks = {
+  "data-processing" = {
+    display_name = "Data Processing Notebook"
+    description  = "Notebook for data processing tasks"
+    workspace_id = "will-be-created-by-module"
+  }
+}
+
+# Workspace role assignments
+workspace_role_assignments = {
+  "admin-assignment" = {
+    workspace_id = "will-be-created-by-module"
+    principal_id = "your-user-or-group-object-id"
+    role         = "Admin"
+  }
+}
+
+# Tags
+tags = {
+  managed_by  = "terraform"
+  environment = "dev"
+  project     = "fabric-infrastructure"
+}
+
+# Git integration (optional)
+enable_git_integration = false
+
+# git_config = {
+#   organization_name = "your-org"
+#   project_name      = "your-project"
+#   repository_name   = "your-repo"
+#   branch_name       = "main"
+#   directory_name    = "fabric"
+# }
