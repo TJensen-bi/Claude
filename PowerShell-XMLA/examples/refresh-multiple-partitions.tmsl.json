@@ -1,0 +1,23 @@
+{
+  "refresh": {
+    "type": "full",
+    "commitMode": "transactional",
+    "objects": [
+      {
+        "database": "YourDatasetName",
+        "table": "Finanspostering",
+        "partition": "2025Q206"
+      },
+      {
+        "database": "YourDatasetName",
+        "table": "Finanspostering",
+        "partition": "2025Q207"
+      },
+      {
+        "database": "YourDatasetName",
+        "table": "Budget",
+        "partition": "2025Q2"
+      }
+    ]
+  }
+}
