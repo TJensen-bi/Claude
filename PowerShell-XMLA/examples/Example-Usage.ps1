@@ -1,8 +1,11 @@
 # ============================================
-# Example Usage Scripts
+# Example Usage - Power BI XMLA with Service Principal
 # ============================================
 
-# Example 1: Using direct parameters
+# ============================================
+# Example 1: Basic Usage with Direct Parameters
+# ============================================
+
 .\Invoke-PowerBIXmlaCommand.ps1 `
     -WorkspaceName "Finance Workspace" `
     -DatasetName "Financial Model" `
@@ -11,77 +14,96 @@
     -ClientId "your-client-id" `
     -ClientSecret "your-client-secret"
 
-# Example 2: Using config file
-.\Invoke-PowerBIXmlaCommand.ps1 `
-    -WorkspaceName "Finance Workspace" `
-    -DatasetName "Financial Model" `
-    -TmslFile ".\examples\refresh-specific-partition.tmsl.json" `
-    -ConfigFile ".\config\config.json"
 
-# Example 3: Using Azure Key Vault (requires Az.KeyVault module and authentication)
-.\Invoke-PowerBIXmlaCommand.ps1 `
-    -WorkspaceName "Finance Workspace" `
-    -DatasetName "Financial Model" `
-    -TmslFile ".\examples\refresh-multiple-partitions.tmsl.json" `
-    -UseKeyVault `
-    -KeyVaultName "tfa-kv-auth-DAP-0001"
+# ============================================
+# Example 2: Using Environment Variables (Recommended)
+# ============================================
 
-# Example 4: Refresh specific partition with custom log path
-.\Invoke-PowerBIXmlaCommand.ps1 `
-    -WorkspaceName "Finance Workspace" `
-    -DatasetName "Financial Model" `
-    -TmslFile ".\examples\refresh-specific-partition.tmsl.json" `
-    -ConfigFile ".\config\config.json" `
-    -LogPath "D:\Logs\powerbi-refresh.log"
+# Set environment variables once (in PowerShell profile or system environment)
+$env:POWERBI_TENANT_ID = "your-tenant-id"
+$env:POWERBI_CLIENT_ID = "your-client-id"
+$env:POWERBI_CLIENT_SECRET = "your-client-secret"
 
-# Example 5: Run with increased timeout (for large datasets)
+# Then use them in the script
 .\Invoke-PowerBIXmlaCommand.ps1 `
     -WorkspaceName "Finance Workspace" `
     -DatasetName "Financial Model" `
     -TmslFile ".\examples\refresh-full-table.tmsl.json" `
-    -ConfigFile ".\config\config.json" `
-    -TimeoutSeconds 600
+    -TenantId $env:POWERBI_TENANT_ID `
+    -ClientId $env:POWERBI_CLIENT_ID `
+    -ClientSecret $env:POWERBI_CLIENT_SECRET
+
 
 # ============================================
-# Scheduled Task Example (Windows Task Scheduler)
+# Example 3: Refresh Specific Partition
 # ============================================
 
-# Create a scheduled task to run the script daily at 2 AM
+.\Invoke-PowerBIXmlaCommand.ps1 `
+    -WorkspaceName "Finance Workspace" `
+    -DatasetName "Financial Model" `
+    -TmslFile ".\examples\refresh-specific-partition.tmsl.json" `
+    -TenantId $env:POWERBI_TENANT_ID `
+    -ClientId $env:POWERBI_CLIENT_ID `
+    -ClientSecret $env:POWERBI_CLIENT_SECRET
+
+
+# ============================================
+# Example 4: Refresh Multiple Partitions
+# ============================================
+
+.\Invoke-PowerBIXmlaCommand.ps1 `
+    -WorkspaceName "Finance Workspace" `
+    -DatasetName "Financial Model" `
+    -TmslFile ".\examples\refresh-multiple-partitions.tmsl.json" `
+    -TenantId $env:POWERBI_TENANT_ID `
+    -ClientId $env:POWERBI_CLIENT_ID `
+    -ClientSecret $env:POWERBI_CLIENT_SECRET
+
+
+# ============================================
+# Example 5: Schedule with Windows Task Scheduler
+# ============================================
+
+# Create a scheduled task to run daily at 2 AM
 $Action = New-ScheduledTaskAction -Execute "PowerShell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"C:\Scripts\PowerShell-XMLA\Invoke-PowerBIXmlaCommand.ps1`" -WorkspaceName `"Finance Workspace`" -DatasetName `"Financial Model`" -TmslFile `"C:\Scripts\PowerShell-XMLA\examples\refresh-full-table.tmsl.json`" -ConfigFile `"C:\Scripts\PowerShell-XMLA\config\config.json`""
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"C:\Scripts\PowerShell-XMLA\Invoke-PowerBIXmlaCommand.ps1`" -WorkspaceName `"Finance Workspace`" -DatasetName `"Financial Model`" -TmslFile `"C:\Scripts\PowerShell-XMLA\examples\refresh-full-table.tmsl.json`" -TenantId `"$env:POWERBI_TENANT_ID`" -ClientId `"$env:POWERBI_CLIENT_ID`" -ClientSecret `"$env:POWERBI_CLIENT_SECRET`""
 
 $Trigger = New-ScheduledTaskTrigger -Daily -At 2am
 
-$Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RunOnlyIfNetworkAvailable
+$Settings = New-ScheduledTaskSettingsSet `
+    -StartWhenAvailable `
+    -RunOnlyIfNetworkAvailable
 
-Register-ScheduledTask -TaskName "PowerBI-DailyRefresh" `
+Register-ScheduledTask `
+    -TaskName "PowerBI-DailyRefresh" `
     -Action $Action `
     -Trigger $Trigger `
     -Settings $Settings `
+    -User "SYSTEM" `
     -Description "Daily Power BI semantic model refresh"
 
+
 # ============================================
-# Error Handling Example
+# Example 6: Error Handling
 # ============================================
 
 try {
-    $Result = .\Invoke-PowerBIXmlaCommand.ps1 `
+    .\Invoke-PowerBIXmlaCommand.ps1 `
         -WorkspaceName "Finance Workspace" `
         -DatasetName "Financial Model" `
         -TmslFile ".\examples\refresh-full-table.tmsl.json" `
-        -ConfigFile ".\config\config.json" `
+        -TenantId $env:POWERBI_TENANT_ID `
+        -ClientId $env:POWERBI_CLIENT_ID `
+        -ClientSecret $env:POWERBI_CLIENT_SECRET `
         -ErrorAction Stop
 
     if ($LASTEXITCODE -eq 0) {
         Write-Host "Refresh completed successfully" -ForegroundColor Green
-        # Send success notification (email, Teams, etc.)
     }
     else {
         Write-Host "Refresh failed with exit code: $LASTEXITCODE" -ForegroundColor Red
-        # Send failure notification
     }
 }
 catch {
     Write-Host "Script execution failed: $($_.Exception.Message)" -ForegroundColor Red
-    # Send failure notification
 }
