@@ -1,0 +1,7 @@
+# Ignore actual config files with credentials
+config.json
+*.config.json
+
+# But keep the example file
+!config.example.json
+!*.example.json

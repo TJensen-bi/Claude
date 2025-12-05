@@ -1,0 +1,12 @@
+{
+  "refresh": {
+    "type": "full",
+    "objects": [
+      {
+        "database": "YourDatasetName",
+        "table": "Finanspostering",
+        "partition": "2025Q206"
+      }
+    ]
+  }
+}

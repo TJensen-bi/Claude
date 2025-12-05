@@ -1,0 +1,10 @@
+{
+  "refresh": {
+    "type": "calculate",
+    "objects": [
+      {
+        "database": "YourDatasetName"
+      }
+    ]
+  }
+}

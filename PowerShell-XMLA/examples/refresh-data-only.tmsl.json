@@ -1,0 +1,11 @@
+{
+  "refresh": {
+    "type": "dataOnly",
+    "objects": [
+      {
+        "database": "YourDatasetName",
+        "table": "YourTableName"
+      }
+    ]
+  }
+}
