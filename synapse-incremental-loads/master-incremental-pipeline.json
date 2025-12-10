@@ -1,0 +1,512 @@
+{
+    "name": "Master_Incremental_Load_Pipeline",
+    "properties": {
+        "description": "Single master pipeline for all incremental loads using watermark pattern. Processes all active tables from control.TableConfig.",
+        "activities": [
+            {
+                "name": "Get_Tables_To_Process",
+                "description": "Retrieve list of active tables from control table",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderStoredProcedureName": "[control].[usp_GetTablesToProcess]",
+                        "queryTimeout": "02:00:00",
+                        "partitionOption": "None"
+                    },
+                    "dataset": {
+                        "referenceName": "sqldb_control_dataset",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "gp_sqldb_fully_qualified_domain_name": {
+                                "value": "@pipeline().globalParameters.gp_sqldb_fully_qualified_domain_name",
+                                "type": "Expression"
+                            },
+                            "gp_sqldb_database_name": {
+                                "value": "@pipeline().globalParameters.gp_sqldb_database_name",
+                                "type": "Expression"
+                            },
+                            "gp_sqldb_user_name": {
+                                "value": "@pipeline().globalParameters.gp_sqldb_user_name",
+                                "type": "Expression"
+                            },
+                            "gp_kv_auth_base_url": {
+                                "value": "@pipeline().globalParameters.gp_kv_auth_base_url",
+                                "type": "Expression"
+                            },
+                            "gp_kv_sqldb_secret_name": {
+                                "value": "@pipeline().globalParameters.gp_kv_sqldb_secret_name",
+                                "type": "Expression"
+                            }
+                        }
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "ForEach_Table",
+                "description": "Loop through each table and process incrementally",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "Get_Tables_To_Process",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('Get_Tables_To_Process').output.value",
+                        "type": "Expression"
+                    },
+                    "isSequential": false,
+                    "batchCount": 10,
+                    "activities": [
+                        {
+                            "name": "Get_New_Watermark",
+                            "description": "Get maximum watermark value from Synapse source",
+                            "type": "Lookup",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.12:00:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "source": {
+                                    "type": "SqlDWSource",
+                                    "sqlReaderQuery": {
+                                        "value": "SELECT ISNULL(MAX(@{item().WatermarkColumn}), '1900-01-01') AS NewWatermarkValue FROM [@{item().SourceSchema}].[@{item().SourceTable}]",
+                                        "type": "Expression"
+                                    },
+                                    "queryTimeout": "02:00:00",
+                                    "partitionOption": "None"
+                                },
+                                "dataset": {
+                                    "referenceName": "synw_dataverse_dataset",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "gp_synw_fully_qualified_domain_name": {
+                                            "value": "@pipeline().globalParameters.gp_synw_fully_qualified_domain_name",
+                                            "type": "Expression"
+                                        },
+                                        "gp_synw_database_name_dataverse": {
+                                            "value": "@pipeline().globalParameters.gp_synw_database_name_dataverse",
+                                            "type": "Expression"
+                                        },
+                                        "gp_synw_user_name": {
+                                            "value": "@pipeline().globalParameters.gp_synw_user_name",
+                                            "type": "Expression"
+                                        },
+                                        "gp_kv_auth_base_url": {
+                                            "value": "@pipeline().globalParameters.gp_kv_auth_base_url",
+                                            "type": "Expression"
+                                        },
+                                        "gp_kv_synw_secret_name": {
+                                            "value": "@pipeline().globalParameters.gp_kv_synw_secret_name",
+                                            "type": "Expression"
+                                        },
+                                        "gp_kv_synw_sp_secret_name": {
+                                            "value": "@pipeline().globalParameters.gp_kv_synw_sp_secret_name",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                },
+                                "firstRowOnly": true
+                            }
+                        },
+                        {
+                            "name": "Check_For_Changes",
+                            "description": "Only process if new watermark is greater than old watermark",
+                            "type": "IfCondition",
+                            "dependsOn": [
+                                {
+                                    "activity": "Get_New_Watermark",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "userProperties": [],
+                            "typeProperties": {
+                                "expression": {
+                                    "value": "@greater(activity('Get_New_Watermark').output.firstRow.NewWatermarkValue, item().WatermarkValue)",
+                                    "type": "Expression"
+                                },
+                                "ifTrueActivities": [
+                                    {
+                                        "name": "Get_Column_Metadata",
+                                        "description": "Get all column names for the table",
+                                        "type": "Lookup",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "timeout": "0.12:00:00",
+                                            "retry": 0,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "source": {
+                                                "type": "SqlDWSource",
+                                                "sqlReaderQuery": {
+                                                    "value": "SELECT STUFF((SELECT ', [' + COLUMN_NAME + ']' FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '@{item().SourceSchema}' AND TABLE_NAME = '@{item().SourceTable}' ORDER BY ORDINAL_POSITION FOR XML PATH(''), TYPE).value('.','NVARCHAR(MAX)'),1,2,' ') AS ColumnList",
+                                                    "type": "Expression"
+                                                },
+                                                "queryTimeout": "02:00:00",
+                                                "partitionOption": "None"
+                                            },
+                                            "dataset": {
+                                                "referenceName": "synw_dataverse_dataset",
+                                                "type": "DatasetReference",
+                                                "parameters": {
+                                                    "gp_synw_fully_qualified_domain_name": {
+                                                        "value": "@pipeline().globalParameters.gp_synw_fully_qualified_domain_name",
+                                                        "type": "Expression"
+                                                    },
+                                                    "gp_synw_database_name_dataverse": {
+                                                        "value": "@pipeline().globalParameters.gp_synw_database_name_dataverse",
+                                                        "type": "Expression"
+                                                    },
+                                                    "gp_synw_user_name": {
+                                                        "value": "@pipeline().globalParameters.gp_synw_user_name",
+                                                        "type": "Expression"
+                                                    },
+                                                    "gp_kv_auth_base_url": {
+                                                        "value": "@pipeline().globalParameters.gp_kv_auth_base_url",
+                                                        "type": "Expression"
+                                                    },
+                                                    "gp_kv_synw_secret_name": {
+                                                        "value": "@pipeline().globalParameters.gp_kv_synw_secret_name",
+                                                        "type": "Expression"
+                                                    },
+                                                    "gp_kv_synw_sp_secret_name": {
+                                                        "value": "@pipeline().globalParameters.gp_kv_synw_sp_secret_name",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            },
+                                            "firstRowOnly": true
+                                        }
+                                    },
+                                    {
+                                        "name": "Copy_Incremental_Data",
+                                        "description": "Copy only changed records to staging table",
+                                        "type": "Copy",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "Get_Column_Metadata",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.12:00:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [
+                                            {
+                                                "name": "TableName",
+                                                "value": "@{item().SourceTable}"
+                                            },
+                                            {
+                                                "name": "OldWatermark",
+                                                "value": "@{item().WatermarkValue}"
+                                            },
+                                            {
+                                                "name": "NewWatermark",
+                                                "value": "@{activity('Get_New_Watermark').output.firstRow.NewWatermarkValue}"
+                                            }
+                                        ],
+                                        "typeProperties": {
+                                            "source": {
+                                                "type": "SqlDWSource",
+                                                "sqlReaderQuery": {
+                                                    "value": "SELECT @{activity('Get_Column_Metadata').output.firstRow.ColumnList} FROM [@{item().SourceSchema}].[@{item().SourceTable}] WHERE [@{item().WatermarkColumn}] > '@{item().WatermarkValue}' AND [@{item().WatermarkColumn}] <= '@{activity('Get_New_Watermark').output.firstRow.NewWatermarkValue}'",
+                                                    "type": "Expression"
+                                                },
+                                                "queryTimeout": "02:00:00",
+                                                "partitionOption": "None"
+                                            },
+                                            "sink": {
+                                                "type": "AzureSqlSink",
+                                                "preCopyScript": {
+                                                    "value": "IF OBJECT_ID('[staging].[@{item().TargetTable}_Stage]', 'U') IS NOT NULL TRUNCATE TABLE [staging].[@{item().TargetTable}_Stage]",
+                                                    "type": "Expression"
+                                                },
+                                                "writeBehavior": "insert",
+                                                "sqlWriterUseTableLock": false,
+                                                "tableOption": "autoCreate",
+                                                "disableMetricsCollection": false
+                                            },
+                                            "enableStaging": false,
+                                            "enableSkipIncompatibleRow": false,
+                                            "translator": {
+                                                "type": "TabularTranslator",
+                                                "typeConversion": true,
+                                                "typeConversionSettings": {
+                                                    "allowDataTruncation": true,
+                                                    "treatBooleanAsNumber": false
+                                                }
+                                            }
+                                        },
+                                        "inputs": [
+                                            {
+                                                "referenceName": "synw_dataverse_dataset",
+                                                "type": "DatasetReference",
+                                                "parameters": {
+                                                    "gp_synw_fully_qualified_domain_name": {
+                                                        "value": "@pipeline().globalParameters.gp_synw_fully_qualified_domain_name",
+                                                        "type": "Expression"
+                                                    },
+                                                    "gp_synw_database_name_dataverse": {
+                                                        "value": "@pipeline().globalParameters.gp_synw_database_name_dataverse",
+                                                        "type": "Expression"
+                                                    },
+                                                    "gp_synw_user_name": {
+                                                        "value": "@pipeline().globalParameters.gp_synw_user_name",
+                                                        "type": "Expression"
+                                                    },
+                                                    "gp_kv_auth_base_url": {
+                                                        "value": "@pipeline().globalParameters.gp_kv_auth_base_url",
+                                                        "type": "Expression"
+                                                    },
+                                                    "gp_kv_synw_secret_name": {
+                                                        "value": "@pipeline().globalParameters.gp_kv_synw_secret_name",
+                                                        "type": "Expression"
+                                                    },
+                                                    "gp_kv_synw_sp_secret_name": {
+                                                        "value": "@pipeline().globalParameters.gp_kv_synw_sp_secret_name",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            }
+                                        ],
+                                        "outputs": [
+                                            {
+                                                "referenceName": "sqldb_staging_dataset",
+                                                "type": "DatasetReference",
+                                                "parameters": {
+                                                    "gp_sqldb_fully_qualified_domain_name": {
+                                                        "value": "@pipeline().globalParameters.gp_sqldb_fully_qualified_domain_name",
+                                                        "type": "Expression"
+                                                    },
+                                                    "gp_sqldb_database_name": {
+                                                        "value": "@pipeline().globalParameters.gp_sqldb_database_name",
+                                                        "type": "Expression"
+                                                    },
+                                                    "gp_sqldb_user_name": {
+                                                        "value": "@pipeline().globalParameters.gp_sqldb_user_name",
+                                                        "type": "Expression"
+                                                    },
+                                                    "gp_kv_auth_base_url": {
+                                                        "value": "@pipeline().globalParameters.gp_kv_auth_base_url",
+                                                        "type": "Expression"
+                                                    },
+                                                    "gp_kv_sqldb_secret_name": {
+                                                        "value": "@pipeline().globalParameters.gp_kv_sqldb_secret_name",
+                                                        "type": "Expression"
+                                                    },
+                                                    "staging_schema": {
+                                                        "value": "staging",
+                                                        "type": "Expression"
+                                                    },
+                                                    "staging_table": {
+                                                        "value": "@{item().TargetTable}_Stage",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "name": "Merge_To_Target",
+                                        "description": "Merge staging data into target table (UPSERT)",
+                                        "type": "SqlServerStoredProcedure",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "Copy_Incremental_Data",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.12:00:00",
+                                            "retry": 2,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "storedProcedureName": "[control].[usp_MergeIncrementalData]",
+                                            "storedProcedureParameters": {
+                                                "TargetSchema": {
+                                                    "value": {
+                                                        "value": "@item().TargetSchema",
+                                                        "type": "Expression"
+                                                    },
+                                                    "type": "String"
+                                                },
+                                                "TargetTable": {
+                                                    "value": {
+                                                        "value": "@item().TargetTable",
+                                                        "type": "Expression"
+                                                    },
+                                                    "type": "String"
+                                                },
+                                                "PrimaryKeyColumns": {
+                                                    "value": {
+                                                        "value": "@item().PrimaryKeyColumns",
+                                                        "type": "Expression"
+                                                    },
+                                                    "type": "String"
+                                                },
+                                                "StagingSchema": {
+                                                    "value": "staging",
+                                                    "type": "String"
+                                                }
+                                            }
+                                        },
+                                        "linkedServiceName": {
+                                            "referenceName": "sqldb_linked_service",
+                                            "type": "LinkedServiceReference"
+                                        }
+                                    },
+                                    {
+                                        "name": "Update_Watermark",
+                                        "description": "Update watermark value after successful merge",
+                                        "type": "SqlServerStoredProcedure",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "Merge_To_Target",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.12:00:00",
+                                            "retry": 0,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "storedProcedureName": "[control].[usp_UpdateWatermark]",
+                                            "storedProcedureParameters": {
+                                                "TableID": {
+                                                    "value": {
+                                                        "value": "@item().TableID",
+                                                        "type": "Expression"
+                                                    },
+                                                    "type": "Int32"
+                                                },
+                                                "NewWatermarkValue": {
+                                                    "value": {
+                                                        "value": "@activity('Get_New_Watermark').output.firstRow.NewWatermarkValue",
+                                                        "type": "Expression"
+                                                    },
+                                                    "type": "DateTime"
+                                                },
+                                                "RowsLoaded": {
+                                                    "value": {
+                                                        "value": "@activity('Copy_Incremental_Data').output.rowsCopied",
+                                                        "type": "Expression"
+                                                    },
+                                                    "type": "Int64"
+                                                }
+                                            }
+                                        },
+                                        "linkedServiceName": {
+                                            "referenceName": "sqldb_linked_service",
+                                            "type": "LinkedServiceReference"
+                                        }
+                                    },
+                                    {
+                                        "name": "Log_Error",
+                                        "description": "Log error to control table on failure",
+                                        "type": "SqlServerStoredProcedure",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "Merge_To_Target",
+                                                "dependencyConditions": [
+                                                    "Failed"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.12:00:00",
+                                            "retry": 0,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "storedProcedureName": "[control].[usp_LogLoadError]",
+                                            "storedProcedureParameters": {
+                                                "TableID": {
+                                                    "value": {
+                                                        "value": "@item().TableID",
+                                                        "type": "Expression"
+                                                    },
+                                                    "type": "Int32"
+                                                },
+                                                "ErrorMessage": {
+                                                    "value": {
+                                                        "value": "@string(activity('Merge_To_Target').error)",
+                                                        "type": "Expression"
+                                                    },
+                                                    "type": "String"
+                                                }
+                                            }
+                                        },
+                                        "linkedServiceName": {
+                                            "referenceName": "sqldb_linked_service",
+                                            "type": "LinkedServiceReference"
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        "parameters": {},
+        "variables": {},
+        "folder": {
+            "name": "D365FO_Master"
+        },
+        "annotations": [
+            "Incremental Load",
+            "Master Pipeline",
+            "Single Pipeline",
+            "Watermark Pattern",
+            "D365 F&O"
+        ]
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}
