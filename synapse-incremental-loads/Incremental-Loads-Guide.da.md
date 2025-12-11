@@ -17,11 +17,11 @@ Denne guide giver anbefalinger til implementering af inkrementelle indlæsninger
 
 ---
 
-## Nuværende Tilstand Analyse
+## Nuværende tilstand analyse
 
-### Nuværende Pipeline Adfærd
+### Nuværende pipeline 
 
-Din eksisterende pipeline udfører **full loads**:
+De eksisterende pipeline udfører **full loads**:
 
 ```sql
 -- Pre-copy script dropper hele tabellen
@@ -31,7 +31,7 @@ DROP TABLE IF EXISTS [schema].[table_name]
 -- tableOption: "autoCreate"
 ```
 
-### Begrænsninger ved Full Loads
+### Begrænsninger ved full loads
 
 - **Høje Dataoverførselsomkostninger**: Overfører hele tabeller gentagne gange
 - **Øget Indlæsningstid**: Behandler alle rækker uanset ændringer
@@ -122,7 +122,7 @@ DROP TABLE IF EXISTS [schema].[table_name]
 
 ## Anbefalet Tilgang
 
-### Primær Anbefaling: **Watermark-Baserede Inkrementelle Indlæsninger**
+### Primær anbefaling: **Watermark-Baserede inkrementelle indlæsninger**
 
 For dit D365 F&O scenario anbefaler jeg **Watermark (High Watermark) tilgangen** fordi:
 
@@ -131,13 +131,13 @@ For dit D365 F&O scenario anbefaler jeg **Watermark (High Watermark) tilgangen**
    - `RECID` - Sekventiel record identifier
    - `CREATEDDATETIME` - Oprettelses tidsstempel
 
-2. **Simplere Implementering**: Minimale ændringer til eksisterende pipelines
+2. **Simplere implementering**: Minimale ændringer til eksisterende pipelines
 
 3. **Omkostningseffektiv**: Reducerer dataoverførsel og behandling
 
-4. **Bevist Mønster**: Veletableret i Azure Data Factory
+4. **Bevist mønster**: Veletableret i Azure Data Factory
 
-### Strategi Oversigt
+### Strategi oversigt
 
 ```
 ┌─────────────────┐      ┌──────────────────┐      ┌─────────────────┐
@@ -149,14 +149,14 @@ For dit D365 F&O scenario anbefaler jeg **Watermark (High Watermark) tilgangen**
          │                        │                         │
          v                        v                         v
    Hent nye/ændrede    Opdater watermark          MERGE/Upsert
-   records kun         efter succes               ændrede data
+   records             efter succes               ændrede data
 ```
 
 ---
 
 ## Implementeringsvejledning
 
-### Trin 1: Opret Watermark Kontroltabel
+### Trin 1: Opret Watermark kontroltabel
 
 Opret en kontroltabel i Azure SQL Database til at tracke det sidst indlæste tidsstempel for hver tabel:
 
@@ -182,14 +182,14 @@ CREATE TABLE [control].[TableConfig] (
     CONSTRAINT UQ_Source_Table UNIQUE (SourceSchema, SourceTable)
 );
 
--- Initialiser med dine F&O tabeller
+-- Initialiser med F&O tabeller
 INSERT INTO [control].[TableConfig]
     (SourceSchema, SourceTable, TargetSchema, TargetTable, WatermarkColumn, PrimaryKeyColumns, WatermarkValue, LoadStatus, IsActive, LoadPriority)
 VALUES
-    ('dbo', 'AssetBook', 'dbo', 'AssetBook', 'MODIFIEDDATETIME', 'RECID', '1900-01-01', 'Not Started', 1, 100);
+    ('dbo', 'generaljournalaccountentry', 'dbo', 'generaljournalaccountentry', 'MODIFIEDDATETIME', 'RECID', '1900-01-01', 'Not Started', 1, 100);
 ```
 
-### Trin 2: Opret Staging Tabeller i Azure SQL DB
+### Trin 2: Opret staging tabeller i Azure SQL DB
 
 ```sql
 -- Opret staging schema
@@ -199,7 +199,7 @@ CREATE SCHEMA [staging];
 -- Navngivningskonvention: staging.{TableName}_Stage
 ```
 
-### Trin 3: Opret Merge Stored Procedure (Upsert Logik)
+### Trin 3: Opret merge stored procedure (Upsert Logik)
 
 ```sql
 CREATE PROCEDURE [control].[usp_MergeIncrementalData]
@@ -266,7 +266,7 @@ END;
 
 ## Best Practices
 
-### 1. Initial Full Load Strategi
+### 1. Initial full load strategi
 
 Før aktivering af inkrementelle indlæsninger:
 
@@ -285,14 +285,14 @@ WHERE SourceTable = 'TableName';
 -- Trin 3: Skift til inkrementel pipeline
 ```
 
-### 2. Håndter Primærnøgle Bestemmelse
+### 2. Håndter primærnøgle
 
 For D365 F&O tabeller, almindelige primærnøgler:
 
 - **RECID**: Universal unik identifier
 - **Sammensatte Nøgler**: Flere kolonner (tjek `INFORMATION_SCHEMA.KEY_COLUMN_USAGE`)
 
-### 3. Overvågning og Alarmer
+### 3. Overvågning og alarmer
 
 Opret en overvågningsvisning:
 
@@ -323,7 +323,7 @@ ORDER BY HoursSinceLastLoad DESC;
 
 Tilføj retry logik og notifikationer i din pipeline configuration.
 
-### 5. Håndtering af Sletninger
+### 5. Håndtering af sletninger
 
 Inkrementelle indlæsninger med watermarks fanger ikke sletninger. Muligheder:
 
@@ -337,8 +337,6 @@ Inkrementelle indlæsninger med watermarks fanger ikke sletninger. Muligheder:
 -- Hvis kilde understøtter soft delete kolonne (f.eks. IsDeleted)
 WHERE MODIFIEDDATETIME > @Watermark OR IsDeleted = 1
 ```
-
-**Mulighed C**: Brug Change Tracking (hvis tilgængelig)
 
 ---
 
@@ -382,39 +380,18 @@ Modificer pipeline til at behandle flere tabeller parallelt ved hjælp af ForEac
 
 ---
 
-## Omkostningsoptimering
-
-### Dataoverførselsomkostninger
-
-**Før (Full Load)**:
-- 1TB tabel indlæst dagligt = 30TB/måned overførsel
-- Omkostning: ~$1,500/måned (til $0.05/GB)
-
-**Efter (Inkrementel Load)**:
-- 1% daglig ændring = 10GB/dag = 300GB/måned
-- Omkostning: ~$15/måned
-- **Besparelser: ~99%**
-
-### Compute Omkostninger
-
-- **Reduceret DTU/vCore forbrug**: Kortere kørende pipelines
-- **Lavere Synapse omkostninger**: Mindre data skannet
-- **Mindre staging**: Reducerede storage omkostninger
-
----
-
 ## Sammenfatning og Næste Skridt
 
-### Nøglefordele
+### Fordele
 
 1. **Performance**: 10-100x hurtigere indlæsninger for tabeller med <10% daglige ændringer
 2. **Omkostning**: 90-99% reduktion i dataoverførselsomkostninger
 3. **Friskhed**: Hyppigere indlæsningsvinduer muligt
 4. **Ressourceforbrug**: Lavere compute og storage footprint
 
-### Anbefalede Næste Skridt
+### Anbefalede næste skridt
 
-1. **Start Småt**: Implementer for AssetBook tabel først
+1. **Start Småt**: Implementer for generaljournalaccountentry tabel først
 2. **Mål**: Sammenlign før/efter metrics
 3. **Udvid**: Rul gradvist ud til flere tabeller
 4. **Overvåg**: Etabler dashboards og alarmer
@@ -429,25 +406,3 @@ Track disse KPI'er:
 - Datafriskhed (lag tid)
 - Omkostning per pipeline kørsel
 
----
-
-## Yderligere Ressourcer
-
-### D365 F&O Data Integration
-- [Microsoft Dynamics 365 Data Entities](https://docs.microsoft.com/dynamics365/)
-- [Azure Synapse Link for Dynamics](https://docs.microsoft.com/azure/synapse-analytics/)
-
-### Azure Data Factory Mønstre
-- [ADF Incremental Copy Pattern](https://docs.microsoft.com/azure/data-factory/tutorial-incremental-copy-overview)
-- [ADF Best Practices](https://docs.microsoft.com/azure/data-factory/concepts-pipelines-activities)
-
-### SQL Optimering
-- [Azure SQL Performance Tuning](https://docs.microsoft.com/azure/sql-database/sql-database-performance-guidance)
-- [Synapse Dedicated Pool Best Practices](https://docs.microsoft.com/azure/synapse-analytics/sql-data-warehouse/)
-
----
-
-**Dokument Version**: 1.0
-**Sidst Opdateret**: 2025-12-11
-**Forfatter**: Claude (Anthropic AI)
-**Til**: Azure Synapse til Azure SQL Inkrementel Indlæsning Implementering
