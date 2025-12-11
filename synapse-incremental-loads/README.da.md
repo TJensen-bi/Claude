@@ -4,11 +4,11 @@
 
 Dette repository indeholder omfattende dokumentation og eksempler til implementering af inkrementelle indlæsninger fra Azure Synapse Analytics til Azure SQL Database for Microsoft Dynamics 365 Finance & Operations (F&O) data.
 
-## 🎯 Hvilken Guide Skal Du Bruge?
+## 🎯 Hvilken guide skal du bruge?
 
 ### ⭐ **ANBEFALET: Forenklet Single-Pipeline Tilgang** ⭐
 
-**Fil**: [`Simplified-Single-Pipeline-Approach.md`](Simplified-Single-Pipeline-Approach.md)
+**Fil**: [`Simplified-Single-Pipeline-Approach.da.md`](Simplified-Single-Pipeline-Approach.da.md)
 
 **Brug denne hvis:**
 - ✅ Du ønsker den simpleste, mest vedligeholdelsesvenlige løsning
@@ -28,7 +28,7 @@ Dette repository indeholder omfattende dokumentation og eksempler til implemente
 
 ---
 
-### 📚 Omfattende Dybdegående Guide
+### 📚 Omfattende dybdegående guide
 
 **Fil**: [`Incremental-Loads-Guide.md`](Incremental-Loads-Guide.md)
 
