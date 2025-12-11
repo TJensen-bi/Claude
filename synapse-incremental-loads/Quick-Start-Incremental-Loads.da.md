@@ -9,9 +9,9 @@ Dette er en komprimeret, trin-for-trin guide til at komme i gang med inkrementel
 - Azure Data Factory
 - Passende tilladelser på begge databaser
 
-## 5-Trins Opsætning
+## 5-Trins opsætning
 
-### Trin 1: Opret Kontrol Infrastruktur (5 minutter)
+### Trin 1: Opret kontrol infrastruktur (5 minutter)
 
 Udfør dette script i **Azure SQL Database**:
 
@@ -43,13 +43,13 @@ CREATE TABLE [control].[TableConfig] (
 );
 GO
 
--- Registrer din første tabel (AssetBook eksempel)
+-- Registrer din første tabel (generaljournalaccountentry eksempel)
 INSERT INTO [control].[TableConfig]
 VALUES (
-    'AssetBook',                    -- TableName
+    'generaljournalaccountentry',   -- TableName
     'dbo',                          -- SchemaName
     'dbo',                          -- TargetSchema
-    'AssetBook',                    -- TargetTable
+    'generaljournalaccountentry',   -- TargetTable
     'MODIFIEDDATETIME',             -- WatermarkColumn
     'RECID',                        -- PrimaryKeyColumns
     '1900-01-01',                   -- Initial WatermarkValue
@@ -65,7 +65,7 @@ VALUES (
 GO
 ```
 
-### Trin 2: Opret Stored Procedures (3 minutter)
+### Trin 2: Opret stored procedures (3 minutter)
 
 ```sql
 -- Procedure 1: Hent primærnøgler
@@ -193,11 +193,11 @@ END;
 GO
 ```
 
-### Trin 3: Udfør Initial Full Load (10-60 minutter afhængig af datastørrelse)
+### Trin 3: Udfør initial full load
 
 Før skift til inkrementelle indlæsninger har du brug for en baseline:
 
-1. **Kør din eksisterende full load pipeline** for AssetBook
+1. **Kør din eksisterende full load pipeline** for generaljournalaccountentry
 2. **Sæt den initiale watermark** til nuværende max værdi:
 
 ```sql
@@ -205,14 +205,14 @@ Før skift til inkrementelle indlæsninger har du brug for en baseline:
 UPDATE [control].[TableConfig]
 SET WatermarkValue = (
     SELECT MAX(MODIFIEDDATETIME)
-    FROM [your_schema].[AssetBook]
+    FROM [your_schema].[generaljournalaccountentry]
 ),
 LoadStatus = 'Initial Load Complete',
 LastLoadDateTime = GETUTCDATE()
-WHERE SourceTable = 'AssetBook';
+WHERE SourceTable = 'generaljournalaccountentry';
 ```
 
-### Trin 4: Deploy Inkrementel Pipeline (15 minutter)
+### Trin 4: Deploy inkrementel pipeline
 
 Brug `master-incremental-pipeline.json` filen som skabelon.
 
@@ -229,19 +229,19 @@ Brug `master-incremental-pipeline.json` filen som skabelon.
 
 4. Test med AssetBook først før udrulning til andre tabeller
 
-### Trin 5: Test Din Opsætning
+### Trin 5: Test opsætning
 
-## Test 1: Verificer Ingen Ændringer
+## Test 1: Verificer ingen ændringer
 
 ```sql
 -- Tjek nuværende watermark
-SELECT * FROM [control].[TableConfig] WHERE SourceTable = 'AssetBook';
+SELECT * FROM [control].[TableConfig] WHERE SourceTable = 'generaljournalaccountentry';
 
 -- Kør inkrementel pipeline
 -- Bør færdiggøre hurtigt med 0 rækker kopieret
 ```
 
-## Test 2: Verificer Inkrementel Indlæsning
+## Test 2: Verificer inkrementel indlæsning
 
 ```sql
 -- I Synapse (kilde), opdater en record (hvis muligt)
@@ -251,11 +251,11 @@ SELECT * FROM [control].[TableConfig] WHERE SourceTable = 'AssetBook';
 -- Bør kun kopiere ændrede records
 
 -- Verificer i Azure SQL Database
-SELECT * FROM [control].[TableConfig] WHERE SourceTable = 'AssetBook';
+SELECT * FROM [control].[TableConfig] WHERE SourceTable = 'generaljournalaccountentry';
 -- RowsLoaded bør vise antal ændrede rækker
 ```
 
-## Test 3: Tjek Overvågning
+## Test 3: Tjek overvågning
 
 ```sql
 -- Vis indlæsningsstatus
@@ -276,26 +276,21 @@ ORDER BY LastLoadDateTime DESC;
 
 | Tabel Navn | Primærnøgle | Watermark Kolonne |
 |-----------|-------------|------------------|
-| AssetBook | RECID | MODIFIEDDATETIME |
-| CustTable | ACCOUNTNUM | MODIFIEDDATETIME |
-| VendTable | ACCOUNTNUM | MODIFIEDDATETIME |
-| InventTable | ITEMID | MODIFIEDDATETIME |
-| SalesTable | SALESID | MODIFIEDDATETIME |
-| PurchTable | PURCHID | MODIFIEDDATETIME |
+| generaljournalaccountentry | RECID | SinkModifiedOn |
 
-**Bemærk**: De fleste D365 F&O tabeller har `MODIFIEDDATETIME` kolonne. Verificer altid med:
+**Bemærk**: De fleste D365 F&O tabeller har `SinkModifiedOn` kolonne. Verificer altid med:
 
 ```sql
 -- Tjek om tabel har MODIFIEDDATETIME
 SELECT COLUMN_NAME, DATA_TYPE
 FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_NAME = 'YourTableName'
-    AND COLUMN_NAME IN ('MODIFIEDDATETIME', 'CREATEDDATETIME', 'RECID');
+    AND COLUMN_NAME IN ('SinkModifiedOn', 'SinkCreatedOn', 'RECID');
 ```
 
 ---
 
-## Tilføjelse af Flere Tabeller
+## Tilføjelse af flere tabeller
 
 For at tilføje yderligere tabeller til inkrementel indlæsning:
 
@@ -307,8 +302,8 @@ VALUES (
     'dbo',                    -- Schema
     'dbo',                    -- TargetSchema
     'CustTable',              -- TargetTable
-    'MODIFIEDDATETIME',       -- Watermark kolonne
-    'ACCOUNTNUM',             -- PrimaryKeyColumns
+    'SinkModifiedOn',         -- Watermark kolonne
+    'recid',                  -- PrimaryKeyColumns
     '1900-01-01',             -- Initial værdi
     NULL, 'Not Started', NULL, NULL, 1, 100, GETUTCDATE(), GETUTCDATE()
 );
@@ -329,7 +324,7 @@ WHERE SourceTable = 'CustTable';
 
 ## Overvågningsqueries
 
-### Daglig Sundhedstjek
+### Daglig sundhedstjek
 
 ```sql
 -- Tabeller med nylige fejl
@@ -394,35 +389,7 @@ WHERE SourceTable = 'YourTable';
 
 ---
 
-## Pipeline Planlægningsanbefalinger
-
-| Dataændringsfrekvens | Anbefalet Schema |
-|----------------------|------------------|
-| Høj (>1000 rækker/time) | Hver 15-30 minutter |
-| Medium (100-1000 rækker/time) | Time |
-| Lav (<100 rækker/time) | Hver 4-6 timer |
-| Meget Lav | Dagligt |
-
-**Tip**: Start med timebaserede indlæsninger og juster baseret på overvågningsdata.
-
----
-
-## Forventede Performance Forbedringer
-
-Baseret på typiske D365 F&O brugsmønstre:
-
-| Metric | Full Load | Inkrementel Load | Forbedring |
-|--------|-----------|------------------|-------------|
-| Eksekveringstid | 30-60 min | 2-5 min | **~90% hurtigere** |
-| Dataoverførsel | 1-10 GB | 10-100 MB | **~99% mindre** |
-| DTU/vCore Forbrug | Højt | Lavt | **~80% reduktion** |
-| Omkostning per Load | $$$ | $ | **~95% billigere** |
-
-*Resultater varierer baseret på tabelstørrelse og ændringshastighed*
-
----
-
-## Næste Skridt Efter Opsætning
+## Næste skridt efter opsætning
 
 1. **Aktiver for flere tabeller** (5-10 ad gangen)
 2. **Opsæt overvågningsalarmer** (Azure Monitor/Data Factory)
@@ -433,37 +400,10 @@ Baseret på typiske D365 F&O brugsmønstre:
 
 ---
 
-## Support og Yderligere Ressourcer
+## Support og yderligere ressourcer
 
 - **Fuld Guide**: Se `Incremental-Loads-Guide.md` for omfattende dokumentation
 - **Eksempel Pipeline**: Se `master-incremental-pipeline.json` for komplet ADF pipeline
 - **Microsoft Docs**: [Azure Data Factory Incremental Copy](https://docs.microsoft.com/azure/data-factory/tutorial-incremental-copy-overview)
 
 ---
-
-## Tjekliste
-
-- [ ] Oprettet control og staging schemas
-- [ ] Oprettet TableConfig tabel
-- [ ] Oprettet 5 stored procedures
-- [ ] Registreret AssetBook i kontroltabel
-- [ ] Udført initial full load
-- [ ] Sat initial watermark værdi
-- [ ] Oprettet/modificeret ADF datasets for staging
-- [ ] Deployed inkrementel pipeline
-- [ ] Testet med ingen ændringer (0 rækker)
-- [ ] Testet med ændringer (>0 rækker)
-- [ ] Verificeret data nøjagtighed i destination
-- [ ] Opsat overvågningsqueries
-- [ ] Planlagt pipeline
-
----
-
-**Estimeret Samlet Opsætningstid**: 1-2 timer (ekskluderende initial full load)
-
-**Sværhedsgrad**: Mellem
-
-**Forudsætningsviden**:
-- Basis SQL
-- Azure Data Factory
-- Azure SQL Database administration
