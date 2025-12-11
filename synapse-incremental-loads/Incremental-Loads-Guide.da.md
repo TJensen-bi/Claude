@@ -1,4 +1,4 @@
-# Omfattende Guide til Inkrementelle Indlæsninger fra Azure Synapse til Azure SQL Database
+# Guide til Inkrementelle indlæsninger fra Azure Synapse til Azure SQL Database
 
 ## Executive Summary
 
