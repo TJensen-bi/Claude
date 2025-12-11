@@ -1,5 +1,5 @@
 {
-    "name": "Master_Incremental_Load_Pipeline",
+    "name": "pipeline1",
     "properties": {
         "description": "Single master pipeline for all incremental loads using watermark pattern. Processes all active tables from control.TableConfig.",
         "activities": [
