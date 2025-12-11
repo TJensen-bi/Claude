@@ -1,4 +1,4 @@
-# Forenklet Single Pipeline Tilgang til Inkrementelle Indlæsninger
+# Forenklet single pipeline tilgang til inkrementelle indlæsninger
 
 ## Arkitekturoversigt
 
@@ -7,7 +7,7 @@ Denne forenklede tilgang bruger:
 - ✅ **ÉN master pipeline** - Behandler alle tabeller ved hjælp af ForEach loop
 - ✅ **Simpel at vedligeholde** - Tilføj nye tabeller ved at indsætte én række
 
-## Fordele Over Multi-Pipeline Tilgang
+## Fordele over multi-pipeline tilgang
 
 | Aspekt | Multi-Pipeline | Single Pipeline |
 |--------|---------------|-----------------|
@@ -20,7 +20,7 @@ Denne forenklede tilgang bruger:
 
 ---
 
-## Trin 1: Opret Enkelt Kontroltabel (2 minutter)
+## Trin 1: Opret enkelt kontroltabel
 
 Udfør dette i **Azure SQL Database**:
 
@@ -30,7 +30,7 @@ CREATE SCHEMA control;
 CREATE SCHEMA staging;
 GO
 
--- Opret samlet kontroltabel med AL metadata
+-- Opret samlet kontroltabel med metadata
 CREATE TABLE [control].[TableConfig] (
     -- Identifikation
     TableID INT IDENTITY(1,1) PRIMARY KEY,
@@ -70,7 +70,7 @@ GO
 
 ---
 
-## Trin 2: Registrer Dine Tabeller (1 minut)
+## Trin 2: Registrer dine tabeller (1 minut)
 
 ```sql
 -- Registrer D365 F&O tabeller til inkrementel indlæsning
@@ -78,16 +78,8 @@ INSERT INTO [control].[TableConfig]
     (SourceSchema, SourceTable, TargetSchema, TargetTable, WatermarkColumn, PrimaryKeyColumns, WatermarkValue, LoadStatus, IsActive, LoadPriority)
 VALUES
     -- Høj prioritet tabeller (indlæses først)
-    ('dbo', 'AssetBook', 'dbo', 'AssetBook', 'MODIFIEDDATETIME', 'RECID', '1900-01-01', 'Not Started', 1, 10),
-    ('dbo', 'CustTable', 'dbo', 'CustTable', 'MODIFIEDDATETIME', 'ACCOUNTNUM', '1900-01-01', 'Not Started', 1, 10),
-    ('dbo', 'VendTable', 'dbo', 'VendTable', 'MODIFIEDDATETIME', 'ACCOUNTNUM', '1900-01-01', 'Not Started', 1, 10),
-
-    -- Medium prioritet tabeller
-    ('dbo', 'InventTable', 'dbo', 'InventTable', 'MODIFIEDDATETIME', 'ITEMID', '1900-01-01', 'Not Started', 1, 50),
-    ('dbo', 'SalesTable', 'dbo', 'SalesTable', 'MODIFIEDDATETIME', 'SALESID', '1900-01-01', 'Not Started', 1, 50),
-
-    -- Lavere prioritet tabeller
-    ('dbo', 'PurchTable', 'dbo', 'PurchTable', 'MODIFIEDDATETIME', 'PURCHID', '1900-01-01', 'Not Started', 1, 100);
+    ('dbo', 'generaljournalaccountentry', 'dbo', 'generaljournalaccountentry', 'SinkModifiedOn', 'recid', '1900-01-01', 'Not Started', 1, 10),
+    ('dbo', 'generaljournalentry', 'dbo', 'generaljournalentry', 'SinkModifiedOn', 'recid', '1900-01-01', 'Not Started', 1, 10);
 
 -- Vis registrerede tabeller
 SELECT
@@ -104,7 +96,7 @@ ORDER BY LoadPriority, SourceTable;
 
 ---
 
-## Trin 3: Opret Stored Procedures (3 minutter)
+## Trin 3: Opret stored procedures
 
 ```sql
 -- Procedure 1: Merge inkrementel data
@@ -243,7 +235,7 @@ GO
 
 ---
 
-## Trin 4: Opret Master Pipeline
+## Trin 4: Opret master pipeline
 
 Her er den komplette enkelte pipeline der håndterer alle tabeller:
 
@@ -251,18 +243,18 @@ Se [`master-incremental-pipeline.json`](master-incremental-pipeline.json) for de
 
 **Nøglefunktioner i denne Pipeline:**
 
-1. **Lookup Aktivitet**: Henter alle aktive tabeller fra kontroltabel
+1. **Lookup aktivitet**: Henter alle aktive tabeller fra kontroltabel
 2. **ForEach Loop**: Behandler hver tabel med samme logik
-3. **Parallel Eksekvering**: `batchCount: 10` betyder 10 tabeller behandles samtidigt
+3. **Parallel eksekvering**: `batchCount: 10` betyder 10 tabeller behandles samtidigt
 4. **Ændringsdetektion**: Indlæser kun hvis watermark er avanceret
 5. **Fejlhåndtering**: Logger fejl per tabel, fortsætter med andre
-6. **Automatisk Watermark Opdatering**: Opdaterer efter succesfuld indlæsning
+6. **Automatisk watermark opdatering**: Opdaterer efter succesfuld indlæsning
 
 ---
 
-## Trin 5: Brug og Administration
+## Trin 5: Brug og administration
 
-### Tilføjelse af en Ny Tabel
+### Tilføjelse af en ny tabel
 
 Indsæt blot en række i kontroltabellen:
 
@@ -334,7 +326,7 @@ ORDER BY LastLoadDateTime;
 
 ---
 
-## Trin 6: Initial Opsætning for Hver Tabel
+## Trin 6: Initial opsætning for hver tabel
 
 Før aktivering af inkrementelle indlæsninger skal du udføre en initial full load:
 
@@ -443,7 +435,7 @@ ORDER BY LoadPriority, SourceTable;
 
 ---
 
-## Komplet Opsætningsscript
+## Komplet opsætningsscript
 
 Her er et komplet script du kan køre for at opsætte alt:
 
@@ -632,12 +624,12 @@ GO
 
 Sv: Ja! Opret blot en separat pipeline til full loads. Brug `IsActive` flaget til at kontrollere hvilke tabeller der får inkrementelle indlæsninger.
 
-**Sp: Hvad hvis en tabel ikke har MODIFIEDDATETIME?**
+**Sp: Hvad hvis en tabel ikke har SinkModifiedOn?**
 
 Sv: Opdater `WatermarkColumn` for den tabel:
 ```sql
 UPDATE [control].[TableConfig]
-SET WatermarkColumn = 'RECID'  -- Eller CREATEDDATETIME, etc.
+SET WatermarkColumn = 'RECID'  -- Eller SinkCreatedOn, etc.
 WHERE SourceTable = 'YourTable';
 ```
 
@@ -672,6 +664,3 @@ Denne forenklede single-pipeline tilgang giver dig:
 - ✅ **Omkostningseffektiv** - Samme 90-99% besparelser som multi-pipeline tilgang
 - ✅ **Skalerbar** - Håndterer hundreder af tabeller effektivt
 
-**Estimeret opsætningstid**: 30 minutter (vs. timer for multi-pipeline)
-
-**Anbefalet til**: Alle nye implementeringer
