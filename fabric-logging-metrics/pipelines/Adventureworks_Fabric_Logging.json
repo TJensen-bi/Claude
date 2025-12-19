@@ -1,0 +1,440 @@
+{
+    "name": "Adventureworks_Fabric_Logging",
+    "properties": {
+        "description": "Pipeline with integrated logging and validation for AdventureWorks data ingestion to Bronze layer",
+        "activities": [
+            {
+                "name": "SetPipelineStartTime",
+                "type": "SetVariable",
+                "dependsOn": [],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "variableName": "PipelineStartTime",
+                    "value": {
+                        "value": "@utcNow()",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "LookupTables",
+                "type": "Lookup",
+                "dependsOn": [
+                    {
+                        "activity": "SetPipelineStartTime",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": "SELECT TABLE_SCHEMA, TABLE_NAME FROM Information_Schema.Tables WHERE TABLE_TYPE = 'Base Table' AND TABLE_SCHEMA = 'SalesLT'",
+                        "queryTimeout": "02:00:00",
+                        "partitionOption": "None"
+                    },
+                    "firstRowOnly": false,
+                    "datasetSettings": {
+                        "annotations": [],
+                        "type": "AzureSqlTable",
+                        "schema": [],
+                        "typeProperties": {
+                            "database": "AdventureWorks"
+                        },
+                        "externalReferences": {
+                            "connection": "YOUR-SOURCE-DB-CONNECTION-ID"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "ForEachTable",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "LookupTables",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('LookupTables').output.value",
+                        "type": "Expression"
+                    },
+                    "isSequential": false,
+                    "batchCount": 4,
+                    "activities": [
+                        {
+                            "name": "CopyTable",
+                            "type": "Copy",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.12:00:00",
+                                "retry": 0,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "typeProperties": {
+                                "source": {
+                                    "type": "AzureSqlSource",
+                                    "queryTimeout": "02:00:00",
+                                    "partitionOption": "None",
+                                    "datasetSettings": {
+                                        "annotations": [],
+                                        "type": "AzureSqlTable",
+                                        "schema": [],
+                                        "typeProperties": {
+                                            "schema": {
+                                                "value": "@item().TABLE_SCHEMA",
+                                                "type": "Expression"
+                                            },
+                                            "table": {
+                                                "value": "@item().TABLE_NAME",
+                                                "type": "Expression"
+                                            },
+                                            "database": "AdventureWorks"
+                                        },
+                                        "externalReferences": {
+                                            "connection": "YOUR-SOURCE-DB-CONNECTION-ID"
+                                        }
+                                    }
+                                },
+                                "sink": {
+                                    "type": "ParquetSink",
+                                    "storeSettings": {
+                                        "type": "LakehouseWriteSettings"
+                                    },
+                                    "formatSettings": {
+                                        "type": "ParquetWriteSettings",
+                                        "enableVertiParquet": true
+                                    },
+                                    "datasetSettings": {
+                                        "annotations": [],
+                                        "connectionSettings": {
+                                            "name": "Bronze",
+                                            "properties": {
+                                                "annotations": [],
+                                                "type": "Lakehouse",
+                                                "typeProperties": {
+                                                    "workspaceId": "YOUR-WORKSPACE-ID",
+                                                    "artifactId": "YOUR-BRONZE-LAKEHOUSE-ID",
+                                                    "rootFolder": "Files"
+                                                },
+                                                "externalReferences": {
+                                                    "connection": "YOUR-BRONZE-CONNECTION-ID"
+                                                }
+                                            }
+                                        },
+                                        "type": "Parquet",
+                                        "typeProperties": {
+                                            "location": {
+                                                "type": "LakehouseLocation",
+                                                "fileName": {
+                                                    "value": "@concat(item().TABLE_NAME,'.parquet')",
+                                                    "type": "Expression"
+                                                },
+                                                "folderPath": {
+                                                    "value": "@concat('adventureworks/', formatDateTime(utcNow(), 'yyyyMMdd'))",
+                                                    "type": "Expression"
+                                                }
+                                            },
+                                            "compressionCodec": "snappy"
+                                        },
+                                        "schema": []
+                                    }
+                                },
+                                "enableStaging": false,
+                                "translator": {
+                                    "type": "TabularTranslator",
+                                    "typeConversion": true,
+                                    "typeConversionSettings": {
+                                        "allowDataTruncation": true,
+                                        "treatBooleanAsNumber": false
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "LogCopyMetrics",
+                            "type": "Notebook",
+                            "dependsOn": [
+                                {
+                                    "activity": "CopyTable",
+                                    "dependencyConditions": ["Succeeded"]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.12:00:00",
+                                "retry": 0,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "typeProperties": {
+                                "notebook": {
+                                    "referenceName": "Log_Copy_Metrics",
+                                    "type": "NotebookReference"
+                                },
+                                "parameters": {
+                                    "pipeline_run_id": {
+                                        "value": {
+                                            "value": "@pipeline().RunId",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "pipeline_name": {
+                                        "value": {
+                                            "value": "@pipeline().Pipeline",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "table_schema": {
+                                        "value": {
+                                            "value": "@item().TABLE_SCHEMA",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "table_name": {
+                                        "value": {
+                                            "value": "@item().TABLE_NAME",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "rows_read": {
+                                        "value": {
+                                            "value": "@string(activity('CopyTable').output.rowsRead)",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "rows_copied": {
+                                        "value": {
+                                            "value": "@string(activity('CopyTable').output.rowsCopied)",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "data_read": {
+                                        "value": {
+                                            "value": "@string(activity('CopyTable').output.dataRead)",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "data_written": {
+                                        "value": {
+                                            "value": "@string(activity('CopyTable').output.dataWritten)",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "copy_duration": {
+                                        "value": {
+                                            "value": "@string(activity('CopyTable').output.copyDuration)",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "execution_status": {
+                                        "value": {
+                                            "value": "Success",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "error_message": {
+                                        "value": {
+                                            "value": "",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "LogCopyFailure",
+                            "type": "Notebook",
+                            "dependsOn": [
+                                {
+                                    "activity": "CopyTable",
+                                    "dependencyConditions": ["Failed"]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.12:00:00",
+                                "retry": 0,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "typeProperties": {
+                                "notebook": {
+                                    "referenceName": "Log_Copy_Metrics",
+                                    "type": "NotebookReference"
+                                },
+                                "parameters": {
+                                    "pipeline_run_id": {
+                                        "value": {
+                                            "value": "@pipeline().RunId",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "pipeline_name": {
+                                        "value": {
+                                            "value": "@pipeline().Pipeline",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "table_schema": {
+                                        "value": {
+                                            "value": "@item().TABLE_SCHEMA",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "table_name": {
+                                        "value": {
+                                            "value": "@item().TABLE_NAME",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "execution_status": {
+                                        "value": {
+                                            "value": "Failed",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "error_message": {
+                                        "value": {
+                                            "value": "@activity('CopyTable').error.message",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "rows_read": {
+                                        "value": {
+                                            "value": "0",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "rows_copied": {
+                                        "value": {
+                                            "value": "0",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "data_read": {
+                                        "value": {
+                                            "value": "0",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "data_written": {
+                                        "value": {
+                                            "value": "0",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    },
+                                    "copy_duration": {
+                                        "value": {
+                                            "value": "0",
+                                            "type": "Expression"
+                                        },
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "ValidateBronzeLayer",
+                "type": "Notebook",
+                "dependsOn": [
+                    {
+                        "activity": "ForEachTable",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "notebook": {
+                        "referenceName": "Bronze_Validation",
+                        "type": "NotebookReference"
+                    },
+                    "parameters": {
+                        "pipeline_run_id": {
+                            "value": {
+                                "value": "@pipeline().RunId",
+                                "type": "Expression"
+                            },
+                            "type": "string"
+                        },
+                        "execution_date": {
+                            "value": {
+                                "value": "@formatDateTime(utcNow(), 'yyyyMMdd')",
+                                "type": "Expression"
+                            },
+                            "type": "string"
+                        },
+                        "control_lakehouse_workspace_id": {
+                            "value": {
+                                "value": "YOUR-WORKSPACE-ID",
+                                "type": "Expression"
+                            },
+                            "type": "string"
+                        },
+                        "control_lakehouse_id": {
+                            "value": {
+                                "value": "YOUR-CONTROL-LAKEHOUSE-ID",
+                                "type": "Expression"
+                            },
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        ],
+        "variables": {
+            "PipelineStartTime": {
+                "type": "String"
+            }
+        },
+        "annotations": [
+            "Logging",
+            "Metrics",
+            "Validation"
+        ]
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}
