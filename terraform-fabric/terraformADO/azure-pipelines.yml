@@ -1,0 +1,118 @@
+trigger:
+- none
+
+parameters: 
+- name: finalcommand
+  displayName: Final Command
+  type: string
+  values:
+  - plan
+  - apply
+  - destroy
+- name: OptionsInit
+  displayName: CommandOptions for Init
+  type: string
+  default: " "
+- name: OptionsPlan
+  displayName: CommandOptions for Plan
+  type: string
+  default: " "
+- name: OptionsFinal
+  displayName: CommandOptions for Apply/Destroy
+  type: string
+  default: " "
+
+variables:
+- group: lib_dfa_tf
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: tfvalidate
+    jobs:
+      - job: ValidateAndPlan
+        continueOnError: false
+        steps:
+        - task: TerraformInstaller@1
+          displayName: Terraform install
+          inputs:
+            terraformVersion: 'latest'
+        - task: TerraformTaskV4@4
+          displayName: terraform initiate
+          inputs:
+            provider: 'azurerm'
+            command: 'init'
+            commandOptions: ${{ parameters.OptionsInit }}
+            workingDirectory: '.'
+            backendServiceArm: $(dfa-tf-service-connection)
+            backendAzureRmResourceGroupName: $(dfa-tf-resource-group)
+            backendAzureRmStorageAccountName: $(dfa-tf-storage-account-name)
+            backendAzureRmContainerName: $(dfa-tf-container-name)
+            backendAzureRmKey: $(dfa-tf-state-file-name)
+        - task: TerraformTaskV4@4
+          displayName: Terraform validation
+          inputs:
+            provider: 'azurerm'
+            command: 'validate'
+            environmentServiceNameAzureRM: $(dfa-tf-service-connection)
+        - ${{ if eq(parameters.finalcommand, 'destroy') }}:
+          - task: TerraformTaskV4@4
+            displayName: Terraform plan
+            inputs:
+              provider: 'azurerm'
+              command: 'plan'
+              commandOptions: '-destroy'
+              environmentServiceNameAzureRM: $(dfa-tf-service-connection)
+        - ${{ if ne(parameters.finalcommand, 'destroy') }}:
+          - task: TerraformTaskV4@4
+            displayName: Terraform plan
+            inputs:
+              provider: 'azurerm'
+              command: 'plan'              
+              commandOptions: ${{ parameters.OptionsPlan }}
+              environmentServiceNameAzureRM: $(dfa-tf-service-connection)
+  - ${{ if ne(parameters.finalcommand, 'plan') }}:
+    - stage: "tf_${{ parameters.finalcommand }}"
+      condition: succeeded('tfvalidate')
+      dependsOn: tfvalidate
+      jobs:
+        - deployment: ${{ parameters.finalcommand }}
+          environment: 'dfa_deploy_terraform_environment'
+          strategy:
+           runOnce:
+             deploy:
+              steps:
+              - checkout: self
+              - task: TerraformInstaller@1
+                displayName: Terraform install
+                inputs:
+                  terraformVersion: 'latest'
+              - task: TerraformTaskV4@4
+                displayName: terraform initiate
+                inputs:
+                  provider: 'azurerm'
+                  command: 'init'
+                  backendServiceArm: $(dfa-tf-service-connection)
+                  backendAzureRmResourceGroupName: $(dfa-tf-resource-group)
+                  backendAzureRmStorageAccountName: $(dfa-tf-storage-account-name)
+                  backendAzureRmContainerName: $(dfa-tf-container-name)
+                  backendAzureRmKey: $(dfa-tf-state-file-name)
+              - task: AzurePowerShell@5
+                displayName: remove locks
+                inputs:
+                  azureSubscription: $(dfa-tf-service-connection)
+                  azurePowerShellVersion: LatestVersion
+                  ScriptType: 'InlineScript'
+                  Inline: |
+                    Connect-AzAccount
+
+                    Set-AzContext $(dfa-tf-subscription-id)
+                    $Lockinfo = Get-AzResourceLock
+                    $Lockinfo | FOREACH { Remove-AzResourceLock -lockId $_.LockId -force }           
+              - task: TerraformTaskV4@4
+                inputs:
+                  provider: 'azurerm'
+                  command: ${{ parameters.finalcommand }}
+                  commandOptions: ${{ parameters.OptionsFinal }}
+                  environmentServiceNameAzureRM: $(dfa-tf-service-connection)
