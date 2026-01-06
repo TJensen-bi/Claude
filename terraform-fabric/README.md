@@ -15,6 +15,8 @@ This project provides a modular, reusable Terraform configuration for deploying 
 - **Type Safety**: Comprehensive variable validation and type constraints
 - **Git Integration**: Optional workspace Git integration support
 - **Medallion Architecture**: Example configurations for bronze/silver/gold lakehouses
+- **Secure Secret Management**: Azure Key Vault integration with automatic secret rotation
+- **OIDC Authentication**: Passwordless authentication for Azure resources via GitHub OIDC
 
 ## Project Structure
 
@@ -43,10 +45,22 @@ terraform-fabric/
 │   │   ├── main.tf
 │   │   ├── variables.tf
 │   │   └── outputs.tf
-│   └── notebook/                      # Notebook module
+│   ├── notebook/                      # Notebook module
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   ├── keyvault/                      # Key Vault module for secret management
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   └── secret-rotation/               # Automatic secret rotation module
 │       ├── main.tf
 │       ├── variables.tf
-│       └── outputs.tf
+│       ├── outputs.tf
+│       └── function_app/              # Azure Function for rotation
+│           ├── function_app.py
+│           ├── requirements.txt
+│           └── host.json
 └── environments/
     ├── dev/                           # Development environment
     │   ├── main.tf
@@ -178,6 +192,116 @@ git_config = {
 }
 ```
 
+## Security: Key Vault & Automatic Secret Rotation
+
+This project uses Azure Key Vault to securely manage Fabric service principal credentials with automatic rotation.
+
+### Architecture Overview
+
+```
+┌─────────────────┐     OIDC      ┌─────────────────┐
+│  GitHub Actions │──────────────▶│    Azure AD     │
+└─────────────────┘               └─────────────────┘
+         │                                 │
+         │ Get Secrets                     │
+         ▼                                 ▼
+┌─────────────────┐               ┌─────────────────┐
+│   Key Vault     │◀──────────────│ Rotation Func   │
+│                 │   Update      │ (Event Grid +   │
+│ - fabric-tenant │   Secret      │  Timer Trigger) │
+│ - fabric-client │               └─────────────────┘
+│ - fabric-secret │                        │
+└─────────────────┘                        │ Create New
+         │                                 │ Credential
+         │ Authenticate                    ▼
+         ▼                        ┌─────────────────┐
+┌─────────────────┐               │  Fabric SP in   │
+│ Microsoft Fabric│               │    Azure AD     │
+└─────────────────┘               └─────────────────┘
+```
+
+### How Automatic Rotation Works
+
+1. **Event Grid Trigger**: Key Vault fires `SecretNearExpiry` event 30 days before expiration
+2. **Azure Function**: Receives the event and creates a new credential in Azure AD
+3. **Key Vault Update**: The new secret is stored in Key Vault with a new expiration date
+4. **No Downtime**: Both old and new secrets work during the transition period
+
+### Setting Up Key Vault Integration
+
+1. **Deploy the Key Vault module**:
+
+```hcl
+module "keyvault" {
+  source = "./modules/keyvault"
+
+  project_name = "fabric"
+  environment  = "prod"
+  location     = "westeurope"
+
+  # Initial secrets (only needed for first deployment)
+  fabric_tenant_id     = var.fabric_tenant_id
+  fabric_client_id     = var.fabric_client_id
+  fabric_client_secret = var.fabric_client_secret
+
+  # Access control
+  deployer_principal_id    = var.deployer_sp_object_id
+  github_oidc_principal_id = var.github_oidc_sp_object_id
+
+  # Enable automatic rotation
+  enable_automatic_rotation      = true
+  rotation_function_principal_id = module.secret_rotation.function_app_principal_id
+
+  tags = var.tags
+}
+```
+
+2. **Deploy the rotation function**:
+
+```hcl
+module "secret_rotation" {
+  source = "./modules/secret-rotation"
+
+  project_name = "fabric"
+  environment  = "prod"
+  location     = "westeurope"
+
+  key_vault_id     = module.keyvault.key_vault_id
+  key_vault_name   = module.keyvault.key_vault_name
+  fabric_sp_app_id = var.fabric_client_id
+
+  # Rotation settings
+  secret_validity_days = 90  # New secrets valid for 90 days
+  rotation_days_before = 30  # Rotate 30 days before expiry
+
+  tags = var.tags
+}
+```
+
+3. **Grant Microsoft Graph permissions** to the rotation function's managed identity:
+   - `Application.ReadWrite.OwnedBy` (to rotate its own credentials)
+
+### Required GitHub Configuration
+
+#### Repository Secrets (OIDC - no passwords stored):
+- `AZURE_CLIENT_ID` - GitHub OIDC service principal client ID
+- `AZURE_TENANT_ID` - Azure AD tenant ID
+- `AZURE_SUBSCRIPTION_ID` - Azure subscription ID
+- `FABRIC_CAPACITY_ID` - Microsoft Fabric capacity ID
+
+#### Repository Variables:
+- `KEY_VAULT_NAME` - Name of the Key Vault (e.g., `kv-fabric-prod`)
+
+### Migration from Direct Secrets
+
+To migrate from storing secrets directly in GitHub:
+
+1. Deploy the Key Vault and rotation infrastructure
+2. Update the GitHub workflow (already done in this project)
+3. Add the `KEY_VAULT_NAME` repository variable
+4. Remove the old `FABRIC_*_SECRET` GitHub secrets
+5. The workflow will now fetch secrets from Key Vault at runtime
+
 ## CI/CD Pipelines
 
 ### GitHub Actions
@@ -188,16 +312,18 @@ The included GitHub Actions workflow (`.github/workflows/terraform.yml`) provide
 - **Terraform plan** for both dev and prod environments
 - **Automatic apply** on merge to main branch
 - **PR comments** with plan results
+- **Key Vault integration** for secure secret retrieval
 
-#### Required GitHub Secrets:
+#### Required GitHub Secrets (OIDC):
 
-- `AZURE_CLIENT_ID`
-- `AZURE_TENANT_ID`
-- `AZURE_SUBSCRIPTION_ID`
-- `FABRIC_TENANT_ID`
-- `FABRIC_CLIENT_ID`
-- `FABRIC_CLIENT_SECRET`
-- `FABRIC_CAPACITY_ID`
+- `AZURE_CLIENT_ID` - For OIDC authentication to Azure
+- `AZURE_TENANT_ID` - Azure AD tenant
+- `AZURE_SUBSCRIPTION_ID` - Azure subscription
+- `FABRIC_CAPACITY_ID` - Fabric capacity ID
+
+#### Required GitHub Variables:
+
+- `KEY_VAULT_NAME` - Name of the Key Vault containing Fabric secrets
 
 ### Azure DevOps
 
@@ -206,14 +332,25 @@ The included Azure Pipeline (`azure-pipelines.yml`) provides:
 - Multi-stage pipeline with validation, planning, and deployment
 - Separate stages for dev and prod environments
 - Manual approval gates for production deployments
+- **Key Vault integration** for secure secret retrieval
 
-#### Required Pipeline Variables:
+#### Required Configuration:
 
-- `FABRIC_TENANT_ID`
-- `FABRIC_CLIENT_ID`
-- `FABRIC_CLIENT_SECRET`
-- `DEV_FABRIC_CAPACITY_ID`
-- `PROD_FABRIC_CAPACITY_ID`
+1. **Service Connection**: Create an Azure service connection named `Azure-Service-Connection` with access to:
+   - Your Azure subscription
+   - Key Vault secrets (Key Vault Secrets User role)
+
+2. **Pipeline Variables** (update in `azure-pipelines.yml`):
+   - `keyVaultName`: Name of your Key Vault (e.g., `kv-fabric-prod`)
+
+3. **Pipeline Variables** (in Azure DevOps):
+   - `DEV_FABRIC_CAPACITY_ID`: Fabric capacity ID for dev
+   - `PROD_FABRIC_CAPACITY_ID`: Fabric capacity ID for prod
+
+#### Removed Variables (no longer needed):
+- ~~`FABRIC_TENANT_ID`~~ - Now fetched from Key Vault
+- ~~`FABRIC_CLIENT_ID`~~ - Now fetched from Key Vault
+- ~~`FABRIC_CLIENT_SECRET`~~ - Now fetched from Key Vault
 
 ## Module Documentation
 

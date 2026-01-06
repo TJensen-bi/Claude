@@ -1,5 +1,6 @@
 # Azure DevOps Pipeline for Terraform Fabric
 # This pipeline validates, plans, and applies Terraform configurations
+# Secrets are fetched from Azure Key Vault for enhanced security
 
 trigger:
   branches:
@@ -26,6 +27,9 @@ variables:
     value: '1.9.0'
   - name: workingDirectory
     value: '$(System.DefaultWorkingDirectory)/terraform-fabric'
+  # Key Vault name - update this for your environment
+  - name: keyVaultName
+    value: 'kv-fabric-prod'
 
 stages:
   - stage: Validate
@@ -82,6 +86,36 @@ stages:
               terraformVersion: $(terraformVersion)
 
           - task: AzureCLI@2
+            displayName: 'Get Fabric Secrets from Key Vault'
+            inputs:
+              azureSubscription: 'Azure-Service-Connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                # Fetch secrets from Key Vault
+                FABRIC_TENANT_ID=$(az keyvault secret show \
+                  --vault-name "$(keyVaultName)" \
+                  --name "fabric-tenant-id" \
+                  --query "value" -o tsv)
+
+                FABRIC_CLIENT_ID=$(az keyvault secret show \
+                  --vault-name "$(keyVaultName)" \
+                  --name "fabric-client-id" \
+                  --query "value" -o tsv)
+
+                FABRIC_CLIENT_SECRET=$(az keyvault secret show \
+                  --vault-name "$(keyVaultName)" \
+                  --name "fabric-client-secret" \
+                  --query "value" -o tsv)
+
+                # Set as secret pipeline variables for subsequent tasks
+                echo "##vso[task.setvariable variable=FABRIC_TENANT_ID;issecret=true]$FABRIC_TENANT_ID"
+                echo "##vso[task.setvariable variable=FABRIC_CLIENT_ID;issecret=true]$FABRIC_CLIENT_ID"
+                echo "##vso[task.setvariable variable=FABRIC_CLIENT_SECRET;issecret=true]$FABRIC_CLIENT_SECRET"
+
+                echo "Successfully retrieved Fabric secrets from Key Vault"
+
+          - task: AzureCLI@2
             displayName: 'Terraform Init - Dev'
             inputs:
               azureSubscription: 'Azure-Service-Connection'
@@ -129,6 +163,36 @@ stages:
             displayName: 'Install Terraform'
             inputs:
               terraformVersion: $(terraformVersion)
+
+          - task: AzureCLI@2
+            displayName: 'Get Fabric Secrets from Key Vault'
+            inputs:
+              azureSubscription: 'Azure-Service-Connection'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                # Fetch secrets from Key Vault
+                FABRIC_TENANT_ID=$(az keyvault secret show \
+                  --vault-name "$(keyVaultName)" \
+                  --name "fabric-tenant-id" \
+                  --query "value" -o tsv)
+
+                FABRIC_CLIENT_ID=$(az keyvault secret show \
+                  --vault-name "$(keyVaultName)" \
+                  --name "fabric-client-id" \
+                  --query "value" -o tsv)
+
+                FABRIC_CLIENT_SECRET=$(az keyvault secret show \
+                  --vault-name "$(keyVaultName)" \
+                  --name "fabric-client-secret" \
+                  --query "value" -o tsv)
+
+                # Set as secret pipeline variables for subsequent tasks
+                echo "##vso[task.setvariable variable=FABRIC_TENANT_ID;issecret=true]$FABRIC_TENANT_ID"
+                echo "##vso[task.setvariable variable=FABRIC_CLIENT_ID;issecret=true]$FABRIC_CLIENT_ID"
+                echo "##vso[task.setvariable variable=FABRIC_CLIENT_SECRET;issecret=true]$FABRIC_CLIENT_SECRET"
+
+                echo "Successfully retrieved Fabric secrets from Key Vault"
 
           - task: AzureCLI@2
             displayName: 'Terraform Init - Prod'
@@ -191,6 +255,36 @@ stages:
                     targetPath: '$(workingDirectory)/environments/dev'
 
                 - task: AzureCLI@2
+                  displayName: 'Get Fabric Secrets from Key Vault'
+                  inputs:
+                    azureSubscription: 'Azure-Service-Connection'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      # Fetch secrets from Key Vault
+                      FABRIC_TENANT_ID=$(az keyvault secret show \
+                        --vault-name "$(keyVaultName)" \
+                        --name "fabric-tenant-id" \
+                        --query "value" -o tsv)
+
+                      FABRIC_CLIENT_ID=$(az keyvault secret show \
+                        --vault-name "$(keyVaultName)" \
+                        --name "fabric-client-id" \
+                        --query "value" -o tsv)
+
+                      FABRIC_CLIENT_SECRET=$(az keyvault secret show \
+                        --vault-name "$(keyVaultName)" \
+                        --name "fabric-client-secret" \
+                        --query "value" -o tsv)
+
+                      # Set as secret pipeline variables for subsequent tasks
+                      echo "##vso[task.setvariable variable=FABRIC_TENANT_ID;issecret=true]$FABRIC_TENANT_ID"
+                      echo "##vso[task.setvariable variable=FABRIC_CLIENT_ID;issecret=true]$FABRIC_CLIENT_ID"
+                      echo "##vso[task.setvariable variable=FABRIC_CLIENT_SECRET;issecret=true]$FABRIC_CLIENT_SECRET"
+
+                      echo "Successfully retrieved Fabric secrets from Key Vault"
+
+                - task: AzureCLI@2
                   displayName: 'Terraform Init - Dev'
                   inputs:
                     azureSubscription: 'Azure-Service-Connection'
@@ -244,6 +338,36 @@ stages:
                     buildType: 'current'
                     artifactName: 'tfplan-prod'
                     targetPath: '$(workingDirectory)/environments/prod'
+
+                - task: AzureCLI@2
+                  displayName: 'Get Fabric Secrets from Key Vault'
+                  inputs:
+                    azureSubscription: 'Azure-Service-Connection'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      # Fetch secrets from Key Vault
+                      FABRIC_TENANT_ID=$(az keyvault secret show \
+                        --vault-name "$(keyVaultName)" \
+                        --name "fabric-tenant-id" \
+                        --query "value" -o tsv)
+
+                      FABRIC_CLIENT_ID=$(az keyvault secret show \
+                        --vault-name "$(keyVaultName)" \
+                        --name "fabric-client-id" \
+                        --query "value" -o tsv)
+
+                      FABRIC_CLIENT_SECRET=$(az keyvault secret show \
+                        --vault-name "$(keyVaultName)" \
+                        --name "fabric-client-secret" \
+                        --query "value" -o tsv)
+
+                      # Set as secret pipeline variables for subsequent tasks
+                      echo "##vso[task.setvariable variable=FABRIC_TENANT_ID;issecret=true]$FABRIC_TENANT_ID"
+                      echo "##vso[task.setvariable variable=FABRIC_CLIENT_ID;issecret=true]$FABRIC_CLIENT_ID"
+                      echo "##vso[task.setvariable variable=FABRIC_CLIENT_SECRET;issecret=true]$FABRIC_CLIENT_SECRET"
+
+                      echo "Successfully retrieved Fabric secrets from Key Vault"
 
                 - task: AzureCLI@2
                   displayName: 'Terraform Init - Prod'
